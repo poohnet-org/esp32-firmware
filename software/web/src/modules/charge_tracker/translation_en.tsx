@@ -6,7 +6,8 @@ let x = {
     "charge_tracker": {
         "status": {
             "last_charges": "Last charges",
-            "current_charge": "Current charge"
+            "current_charge": "Current charge",
+            "current_price": "Current price"
         },
         "navbar": {
             "charge_tracker": "Charge Tracker"

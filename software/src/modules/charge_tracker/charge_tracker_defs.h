@@ -26,22 +26,25 @@
 #define USER_FILTER_ALL_USERS -2
 #define USER_FILTER_DELETED_USERS -1
 
-#define CHARGE_RECORD_FOLDER "/charge-records"
+#define CHARGE_RECORD_FOLDER "/charge-records-2"
 
 struct [[gnu::packed]] ChargeStart {
     uint32_t timestamp_minutes = 0;
     float meter_start = 0.0f;
     uint8_t user_id = 0;
+    uint16_t electricity_price = 0;
+    uint8_t __dummy[5] = {0};
 };
 
-static_assert(sizeof(ChargeStart) == 9, "Unexpected size of ChargeStart");
+static_assert(sizeof(ChargeStart) == 16, "Unexpected size of ChargeStart");
 
 struct [[gnu::packed]] ChargeEnd {
-    uint32_t charge_duration : 24;
+    uint32_t charge_duration = 0;
     float meter_end = 0.0f;
+    uint8_t __dummy[8] = {0};
 };
 
-static_assert(sizeof(ChargeEnd) == 7, "Unexpected size of ChargeEnd");
+static_assert(sizeof(ChargeEnd) == 16, "Unexpected size of ChargeEnd");
 
 struct [[gnu::packed]] Charge {
     ChargeStart cs;

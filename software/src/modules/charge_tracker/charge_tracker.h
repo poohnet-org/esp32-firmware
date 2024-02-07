@@ -70,6 +70,7 @@ public:
 
     ConfigRoot config;
     ConfigRoot pdf_letterhead_config;
+    ConfigRoot electricity_price_update;
 
     std::mutex records_mutex;
     std::mutex pdf_mutex;
