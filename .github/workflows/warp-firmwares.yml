@@ -1,8 +1,8 @@
 name: WARP Firmwares
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
+  #schedule:
+  #  - cron: '0 0 * * *'
 jobs:
   build:
     runs-on: ${{ matrix.os }}
