@@ -6,7 +6,8 @@ let x = {
     "charge_tracker": {
         "status": {
             "last_charges": "Letzte Ladevorgänge",
-            "current_charge": "Laufender Ladevorgang"
+            "current_charge": "Laufender Ladevorgang",
+            "current_price": "Aktueller Strompreis"
         },
         "navbar": {
             "charge_tracker": "Ladetracker"

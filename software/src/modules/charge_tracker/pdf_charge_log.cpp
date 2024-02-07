@@ -244,15 +244,17 @@
 
 #define DISPLAY_NAME_COLUMN 1
 
-#define TABLE_HEADER_COLS 6
+#define TABLE_HEADER_COLS 8
 
 static const float table_column_offsets[] {
-    (0 * (LINE_WIDTH / TABLE_HEADER_COLS)),
-    (0.8 * (LINE_WIDTH / TABLE_HEADER_COLS)),
-    (3.4 * (LINE_WIDTH / TABLE_HEADER_COLS)),
-    (4.125 * (LINE_WIDTH / TABLE_HEADER_COLS)),
-    (4.75 * (LINE_WIDTH / TABLE_HEADER_COLS)),
-    (5.575 * (LINE_WIDTH / TABLE_HEADER_COLS)),
+    (0.0 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Start time
+    (1.1 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // User
+    (2.5 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Duration
+    (3.4 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Meter start
+    (4.1 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Meter end
+    (4.9 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Charged
+    (5.9 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Price
+    (6.9 * (LINE_WIDTH / TABLE_HEADER_COLS)),   // Cost
     LINE_WIDTH
 };
 
@@ -361,7 +363,7 @@ int init_pdf_generator(std::function<int(const void *data, size_t len)> &write_c
             // Stats block (top right)
             if (stream_num == 0) {
                 float offsets[2] = {0, LINE_WIDTH};
-                return pdf_add_multiple_text_spacing(pdf_doc, NULL, stats, stats_lines, 1, FONT_SIZE, LEFT_MARGIN + table_column_offsets[2], PDF_A4_HEIGHT - TOP_MARGIN - 10 - (LINE_HEIGHT * 1), PDF_BLACK, 0, LINE_HEIGHT, offsets);
+                return pdf_add_multiple_text_spacing(pdf_doc, NULL, stats, stats_lines, 1, FONT_SIZE, LEFT_MARGIN + table_column_offsets[5], PDF_A4_HEIGHT - TOP_MARGIN - 10 - (LINE_HEIGHT * 1), PDF_BLACK, 0, LINE_HEIGHT, offsets);
             }
             --stream_num;
 
@@ -377,7 +379,7 @@ int init_pdf_generator(std::function<int(const void *data, size_t len)> &write_c
 
         // Table header
         if (stream_num == 0) {
-            return pdf_add_multiple_text_spacing(pdf_doc, NULL, table_header, 1, 6, FONT_SIZE, LEFT_MARGIN, content_offset, PDF_BLACK, 0, LINE_HEIGHT, table_column_offsets, false);
+            return pdf_add_multiple_text_spacing(pdf_doc, NULL, table_header, 1, 8, FONT_SIZE, LEFT_MARGIN, content_offset, PDF_BLACK, 0, LINE_HEIGHT, table_column_offsets, false);
         }
         --stream_num;
 
@@ -403,7 +405,7 @@ int init_pdf_generator(std::function<int(const void *data, size_t len)> &write_c
         // TODO: check if lines_generated != lines and if so handle this somehow.
         (void) lines_generated;
 
-        return pdf_add_multiple_text_spacing(pdf_doc, NULL, lines_string, lines, 6, FONT_SIZE, LEFT_MARGIN, table_text_offset, PDF_BLACK, 0, LINE_HEIGHT * 1.2, table_column_offsets);
+        return pdf_add_multiple_text_spacing(pdf_doc, NULL, lines_string, lines, 8, FONT_SIZE, LEFT_MARGIN, table_text_offset, PDF_BLACK, 0, LINE_HEIGHT * 1.2, table_column_offsets);
     });
 
     int rc = pdf_save_file(pdf);

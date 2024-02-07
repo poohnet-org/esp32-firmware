@@ -39,10 +39,11 @@ import { Table, TableRow } from "../../ts/components/table";
 import { useMemo } from "preact/hooks";
 import { NavbarItem } from "../../ts/components/navbar_item";
 import { StatusSection } from "../../ts/components/status_section";
-import { BatteryCharging, Calendar, Clock, Download, User, List, Send, Mail } from "react-feather";
+import { BatteryCharging, Calendar, Clock, DollarSign, Download, User, List, Send, Mail } from "react-feather";
 import { CSVFlavor } from "./generated/csv_flavor.enum";
 import { Language } from "../../ts/language";
 import { GenerationState } from "./generated/generation_state.enum";
+import { OutputFloat } from "../../ts/components/output_float";
 
 export function ChargeTrackerNavbar() {
     return <NavbarItem name="charge_tracker" module="charge_tracker" title={__("charge_tracker.navbar.charge_tracker")} symbol={<List />} />;
@@ -81,7 +82,7 @@ type ChargeTrackerState = S & API.getType['charge_tracker/state'];
 
 let wallet_icon = <svg width="24" height="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="6.0999" width="22" height="16" rx="2" ry="2"/><path d="m2.9474 6.0908 15.599-4.8048s0.59352-0.22385 0.57647 0.62527c-0.02215 1.1038-0.01535 3.6833-0.01535 3.6833"/></svg>
 
-function TrackedCharge(props: {charge: Charge, users: API.getType['users/config']['users'], electricity_price: number}) {
+function TrackedCharge(props: {charge: Charge, users: API.getType['users/config']['users']}) {
     const display_name = useMemo(
         () => {
             let result = __("charge_tracker.script.unknown_user");
@@ -98,7 +99,7 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
         [props.users, props.charge.user_id, get_active_language_enum()]
     );
 
-    let have_charge_cost = props.electricity_price > 0 && props.charge.energy_charged != null;
+    let have_charge_cost = props.charge.electricity_price > 0 && props.charge.energy_charged != null;
 
     return <ListGroupItem>
         <div class="row justify-content-end">
@@ -124,11 +125,15 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
             </div>
         </div>
         {have_charge_cost ?
-            <div class="row justify-content-end mb-n2">
+            <div class="row justify-content-end">
+                <div class="col-auto pr-2 mb-2">
+                    <span class="pr-2"><DollarSign/></span>
+                    <span style="vertical-align: middle;">{util.toLocaleFixed(props.charge.electricity_price / 100, 2)} ct/kWh</span>
+                </div>
                 <div class="col px-0" />
-                <div class="col-auto ps-2 mb-2">
-                    <span style="vertical-align: middle;">{util.toLocaleFixed(props.electricity_price / 100 * props.charge.energy_charged / 100, 2)} €</span>
-                    <span class="ps-2">{wallet_icon}</span>
+                <div class="col-auto pl-2 mb-2">
+                    <span style="vertical-align: middle;">{util.toLocaleFixed(props.charge.electricity_price / 100 * props.charge.energy_charged / 100, 2)} €</span>
+                    <span class="pl-2">{wallet_icon}</span>
                 </div>
             </div> : undefined}
     </ListGroupItem>
@@ -243,10 +248,10 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
         });
     }
 
-    get_last_charges(charges: Readonly<Charge[]>, price: number) {
+    get_last_charges(charges: Readonly<Charge[]>) {
         let users_config = API.get('users/config');
 
-        return charges.map(c => <TrackedCharge charge={c} users={users_config.users} electricity_price={price}/>)
+        return charges.map(c => <TrackedCharge charge={c} users={users_config.users} />)
                       .reverse();
     }
 
@@ -774,7 +779,7 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
 
                 <FormRow label={__("charge_tracker.content.last_charges")} label_muted={__("charge_tracker.content.last_charges_desc")}>
                     <ListGroup>
-                        {this.get_last_charges(state.last_charges ?? [], state.electricity_price)}
+                        {this.get_last_charges(state.last_charges ?? [])}
                     </ListGroup>
                 </FormRow>
             </SubPage>
@@ -794,6 +799,10 @@ export class ChargeTrackerStatus extends Component {
         let users = API.get('users/config').users;
         let electricity_price = API.get('charge_tracker/config').electricity_price;
 
+        let electricity_price_edit = <FormRow label={__("charge_tracker.status.current_price")}>
+            <OutputFloat value={electricity_price} digits={2} scale={2} unit={'ct/kWh'}/>
+        </FormRow>
+
         let current_charge = <></>;
 
         if (cc.user_id != -1) {
@@ -807,14 +816,14 @@ export class ChargeTrackerStatus extends Component {
                 charge_duration: charge_duration,
                 energy_charged: (energy_abs === null || cc.meter_start === null) ? null : (energy_abs - cc.meter_start),
                 timestamp_minutes: cc.timestamp_minutes,
-                user_id: cc.user_id
+                user_id: cc.user_id,
+                electricity_price: cc.electricity_price
             };
 
             current_charge = <FormRow label={__("charge_tracker.status.current_charge")}>
                 <ListGroup>
                     <TrackedCharge charge={charge}
                                     users={users}
-                                    electricity_price={electricity_price}
                                     />
                 </ListGroup>
             </FormRow>;
@@ -826,13 +835,13 @@ export class ChargeTrackerStatus extends Component {
                     {last_charges.slice(-3).map(c =>
                         <TrackedCharge charge={c}
                                         users={users}
-                                        electricity_price={electricity_price}
                                         />
                     ).reverse()}
                 </ListGroup>
             </FormRow>;
 
         return <StatusSection name="charge_tracker">
+                {electricity_price_edit}
                 {current_charge}
                 {last_charges_list}
             </StatusSection>;
