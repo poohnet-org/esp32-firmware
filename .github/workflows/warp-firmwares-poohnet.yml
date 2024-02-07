@@ -1,0 +1,62 @@
+name: WARP Firmwares poohnet
+on:
+  push
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        environment: [warp_poohnet, warp2_poohnet]
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+            ./software/.pio
+            ./software/packages
+          key: ${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: ${{ matrix.os }}-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+      - name: 'Build Firmware: ${{ matrix.environment }}'
+        working-directory: ./software
+        run: pio run -e ${{ matrix.environment }} -t clean && pio run -e ${{ matrix.environment }}
+      - name: 'Deleting Caches: ${{ matrix.os }}-'
+        if: matrix.environment == 'warp4'
+        run: gh cache delete ${{ matrix.os }}- || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - uses: actions/cache/save@v4
+        if: matrix.environment == 'warp4'
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+            ./software/.pio
+            ./software/packages
+          key: ${{ matrix.os }}-${{ github.run_id }}
+
+  cleanup:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [warp-firmwares, warp-firmwares-poohnet]
+    steps:
+      - name: Delete workflow runs for "${{ matrix.environment }}"
+        uses: poohnet/delete-old-workflow-runs@v0.3.1
+        with:
+          repository: ${{ github.repository }}
+          workflow: ".github/workflows/${{ matrix.environment }}.yml"
+          older-than-seconds: 1209600 # 14*24*60*60
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
