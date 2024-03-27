@@ -24,6 +24,8 @@
 #include "bindings/bricklet_evse.h"
 #include "modules/evse_common/evse_common.h"
 
+#include "control_pilot_backend.h"
+
 class EVSE final : public DeviceModule<TF_EVSE,
                                        tf_evse_create,
                                        tf_evse_get_bootloader_mode,
@@ -90,10 +92,11 @@ protected:
 
     ConfigRoot user_calibration;
 
-private:
-    ConfigRoot control_pilot_disconnect;
-    ConfigRoot control_pilot_disconnect_update;
+public:
+    void register_cp_backend(ControlPilotBackend* cp_backend);
 
+private:
+    ControlPilotBackend* _cp_backend = nullptr;
     micros_t wait_after_cp_disconnect = 0_us;
 };
 

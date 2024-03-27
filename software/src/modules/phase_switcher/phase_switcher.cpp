@@ -26,11 +26,6 @@
 
 #include "module_dependencies.h"
 
-#define EXTERNAL_CONTROL_STATE_AVAILABLE    0
-#define EXTERNAL_CONTROL_STATE_DISABLED     1
-#define EXTERNAL_CONTROL_STATE_UNAVAILABLE  2
-#define EXTERNAL_CONTROL_STATE_SWITCHING    3
-
 static const char* toString(bool cp_disconnect)
 {
   return cp_disconnect ? "disconnected" : "connected";
@@ -44,6 +39,7 @@ PhaseSwitcher::PhaseSwitcher()
 void PhaseSwitcher::pre_setup()
 {
   this->DeviceModule::pre_setup();
+  this->ControlPilotBackend::pre_setup();
 
   state = Config::Object({
     {"cp_disconnect", Config::Bool(false)},
@@ -62,7 +58,10 @@ void PhaseSwitcher::setup()
   }
 
   initialized = true;
+  evse.register_cp_backend(this);
+  api.addFeature("cp_disconnect");
   api.addFeature("phase_switcher");
+
   evse_common.set_phase_switcher_enabled(true);
 
   task_scheduler.scheduleUncancelable([this]() {
@@ -79,6 +78,7 @@ void PhaseSwitcher::register_urls()
   api.addState("phase_switcher/state", &state);
 
   this->DeviceModule::register_urls();
+  this->ControlPilotBackend::register_urls();
 }
 
 void PhaseSwitcher::loop()
@@ -216,6 +216,8 @@ void PhaseSwitcher::update_all_data()
   state.get("cp_disconnect")->updateBool(cp_disconnect);
   state.get("phases_current")->updateUint(phases_current);
   state.get("phases_active")->updateUint(phases_active);
+
+  control_pilot_disconnect.get("disconnect")->updateBool(cp_disconnect);
 }
 
 void PhaseSwitcher::do_the_stuff()
