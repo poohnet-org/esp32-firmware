@@ -560,17 +560,7 @@ void EVSE::update_all_data()
     firmware_update.vehicle_connected = charger_state != 0 && charger_state != 4;
 #endif
 
-    bool cp_disconnect = false;
-
-#if MODULE_EVSE_CPC_AVAILABLE()
-    if (api.hasFeature("cp_disconnect")) {
-        cp_disconnect = evse_cpc.get_control_pilot_disconnect();
-    }
-#elif MODULE_PHASE_SWITCHER_AVAILABLE()
-    if (api.hasFeature("phase_switcher")) {
-        cp_disconnect = phase_switcher.get_control_pilot_disconnect();
-    }
-#endif
+    bool cp_disconnect = (_cp_backend) ? _cp_backend->get_control_pilot_disconnect() : false;
 
     // get_state - If the CP contact is disconnected (or we've just reconnected) we stay in the current state.
     if (!cp_disconnect && ((wait_after_cp_disconnect == 0_us) || deadline_elapsed(wait_after_cp_disconnect + 1_s))) {
@@ -642,8 +632,6 @@ void EVSE::update_all_data()
 
     evse_common.boost_mode.get("enabled")->updateBool(boost_mode_enabled);
 
-    control_pilot_disconnect.get("disconnect")->updateBool(cp_disconnect);
-
     // get_indicator_led
     evse_common.indicator_led.get("indication")->updateInt(indication);
     evse_common.indicator_led.get("duration")->updateUint(duration);
@@ -705,20 +693,27 @@ void EVSE::update_all_data()
 #endif
 }
 
-void EVSE::set_control_pilot_disconnect(bool cp_disconnect, bool *cp_disconnected) {
-    if (cp_disconnect != get_control_pilot_disconnect()) {
-        wait_after_cp_disconnect = millis();
 
-#if MODULE_EVSE_CPC_AVAILABLE()
-        evse_cpc.set_control_pilot_disconnect(cp_disconnect, cp_disconnected);
-#elif MODULE_PHASE_SWITCHER_AVAILABLE()
-        phase_switcher.set_control_pilot_disconnect(cp_disconnect, cp_disconnected);
-#endif
+void EVSE::register_cp_backend(ControlPilotBackend* cp_backend)
+{
+    _cp_backend = cp_backend;
+}
+
+void EVSE::set_control_pilot_disconnect(bool cp_disconnect, bool* cp_disconnected)
+{
+    if (_cp_backend && (cp_disconnect != _cp_backend->get_control_pilot_disconnect())) {
+        wait_after_cp_disconnect = micros_t(millis());
+        _cp_backend->set_control_pilot_disconnect(cp_disconnect, cp_disconnected);
     }
 }
 
-bool EVSE::get_control_pilot_disconnect() {
-    return control_pilot_disconnect.get("disconnect")->asBool();
+bool EVSE::get_control_pilot_disconnect()
+{
+    if (_cp_backend) {
+        return _cp_backend->get_control_pilot_disconnect();
+    }
+
+    return false;
 }
 
 

@@ -27,6 +27,8 @@
 #include "device_module.h"
 #include "phase_switcher_bricklet_firmware_bin.embedded.h"
 
+#include "../evse/control_pilot_backend.h"
+
 #if defined(__GNUC__)
   #pragma GCC diagnostic push
   //#include "gcc_warnings.h"
@@ -49,7 +51,7 @@ class PhaseSwitcher final : public DeviceModule<TF_PhaseSwitcher,
                                 tf_phase_switcher_get_bootloader_mode,
                                 tf_phase_switcher_reset,
                                 tf_phase_switcher_destroy,
-                                false>
+                                false>, ControlPilotBackend
 {
 public:
   PhaseSwitcher();
@@ -61,8 +63,9 @@ public:
 
   void setup_phase_switcher();
 
-  bool get_control_pilot_disconnect() const;
-  void set_control_pilot_disconnect(bool cp_disconnect, bool* cp_disconnected);
+  // ControlPilotBackend implementation
+  bool get_control_pilot_disconnect() const override;
+  void set_control_pilot_disconnect(bool cp_disconnect, bool* cp_disconnected) override;
 
   uint8_t get_phases_requested() const;
   void set_phases_requested(uint8_t phases_requested);

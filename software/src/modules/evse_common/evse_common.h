@@ -126,6 +126,7 @@ class EvseCommon final : public IModule
     // But this allows us to make the configs private, to enforce all access happens via the public methods below.
     friend class EVSE;
     friend class EVSEV2;
+    friend class ControlPilotBackend;
 
 public: // We need to access the backend in cm_networking for the phase switch. FIXME: Let EvseCommon implement PhaseSwitcherBackend instead.
     IEvseBackend *backend = nullptr;
