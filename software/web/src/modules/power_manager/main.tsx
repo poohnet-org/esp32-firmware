@@ -154,7 +154,7 @@ export class PowerManagerStatus extends Component {
         const phases    = API.get_unchecked('evse/low_level_state')?.phases_current | API.get_unchecked('energy_manager/state')?.phases_switched;
 
         return <StatusSection name="power_manager">
-            {is_warp3 || wem1_cont ?
+            {is_warp3 || wem1_cont || API.hasFeature("phase_switch") ?
                 API.hasFeature("phase_switch") && ((is_warp3 && !API.get_unchecked("evse/management_enabled").enabled) || (wem1_cont && API.get_unchecked("power_manager/config").phase_switching_mode == 3)) ?
                     <FormRow label={__("power_manager.status.phase_switching")}>
                         <div class="row g-2">

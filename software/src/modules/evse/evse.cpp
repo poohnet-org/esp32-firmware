@@ -119,8 +119,11 @@ void EVSE::pre_setup()
     control_pilot_disconnect = Config::Object({
         {"disconnect", Config::Bool(false)}
     });
-
     control_pilot_disconnect_update = control_pilot_disconnect;
+
+    phases_connected = Config::Object({
+        {"phases", Config::Uint8(3)}
+    });
 }
 
 void EVSE::post_register_urls()
@@ -149,6 +152,7 @@ void EVSE::post_register_urls()
         }
         this->set_control_pilot_disconnect(control_pilot_disconnect_update.get("disconnect")->asBool(), nullptr);
     }, true);
+    api.addState("evse/phases_connected", &phases_connected);
 }
 
 void EVSE::factory_reset()
@@ -556,10 +560,25 @@ void EVSE::update_all_data()
     firmware_update.vehicle_connected = charger_state != 0 && charger_state != 4;
 #endif
 
-    // get_state
+    bool cp_disconnect = false;
 
-    evse_common.state.get("iec61851_state")->updateUint(iec61851_state);
-    evse_common.state.get("charger_state")->updateUint(charger_state);
+#if MODULE_EVSE_CPC_AVAILABLE()
+    if (api.hasFeature("cp_disconnect")) {
+        cp_disconnect = evse_cpc.get_control_pilot_disconnect();
+    }
+#elif MODULE_PHASE_SWITCHER_AVAILABLE()
+    if (api.hasFeature("phase_switcher")) {
+        cp_disconnect = phase_switcher.get_control_pilot_disconnect();
+    }
+#endif
+
+    // get_state - If the CP contact is disconnected (or we've just reconnected) we stay in the current state.
+    if (!cp_disconnect && ((wait_after_cp_disconnect == 0_us) || deadline_elapsed(wait_after_cp_disconnect + 1_s))) {
+        wait_after_cp_disconnect = 0_us;
+        evse_common.state.get("iec61851_state")->updateUint(iec61851_state);
+        evse_common.state.get("charger_state")->updateUint(charger_state);
+    }
+
     evse_common.state.get("contactor_state")->updateUint(contactor_state);
     bool contactor_error_changed = evse_common.state.get("contactor_error")->updateUint(contactor_error);
     evse_common.state.get("allowed_charging_current")->updateUint(allowed_charging_current);
@@ -623,10 +642,6 @@ void EVSE::update_all_data()
 
     evse_common.boost_mode.get("enabled")->updateBool(boost_mode_enabled);
 
-    bool cp_disconnect = false;
-#if MODULE_EVSE_CPC_AVAILABLE()
-    cp_disconnect = evse_cpc.get_control_pilot_disconnect();
-#endif
     control_pilot_disconnect.get("disconnect")->updateBool(cp_disconnect);
 
     // get_indicator_led
@@ -666,6 +681,14 @@ void EVSE::update_all_data()
     evse_common.automation_current.get("current")->updateUint(max_current[CHARGING_SLOT_AUTOMATION]);
 #endif
 
+#if MODULE_PHASE_SWITCHER_AVAILABLE()
+    evse_common.phase_switcher_enabled.get("enabled")->updateBool(SLOT_ACTIVE(active_and_clear_on_disconnect[CHARGING_SLOT_PHASE_SWITCHER]));
+
+    evse_common.low_level_state.get("phases_current")->updateUint(phase_switcher.get_phases_current());
+    evse_common.low_level_state.get("phases_requested")->updateUint(phase_switcher.get_phases_requested());
+    evse_common.low_level_state.get("phases_state")->updateUint(phase_switcher.get_phases_state());
+#endif
+
     // get_user_calibration
     user_calibration.get("user_calibration_active")->updateBool(user_calibration_active);
     user_calibration.get("voltage_diff")->updateInt(voltage_diff);
@@ -683,11 +706,71 @@ void EVSE::update_all_data()
 }
 
 void EVSE::set_control_pilot_disconnect(bool cp_disconnect, bool *cp_disconnected) {
+    if (cp_disconnect != get_control_pilot_disconnect()) {
+        wait_after_cp_disconnect = millis();
+
 #if MODULE_EVSE_CPC_AVAILABLE()
-    evse_cpc.set_control_pilot_disconnect(cp_disconnect, cp_disconnected);
+        evse_cpc.set_control_pilot_disconnect(cp_disconnect, cp_disconnected);
+#elif MODULE_PHASE_SWITCHER_AVAILABLE()
+        phase_switcher.set_control_pilot_disconnect(cp_disconnect, cp_disconnected);
 #endif
+    }
 }
 
 bool EVSE::get_control_pilot_disconnect() {
     return control_pilot_disconnect.get("disconnect")->asBool();
 }
+
+
+#if MODULE_PHASE_SWITCHER_AVAILABLE()
+    uint32_t EVSE::get_phase_switcher_priority()                            { return 12; }
+    bool EVSE::phase_switching_capable()                                    { return api.hasFeature("phase_switch"); }
+    bool EVSE::can_switch_phases_now(uint32_t phases_wanted)                { return true; }
+    uint32_t EVSE::get_phases()                                             { return evse_common.low_level_state.get("phases_current")->asUint(); }
+
+    PhaseSwitcherBackend::SwitchingState EVSE::get_phase_switching_state()
+    {
+        if (evse_common.state.get("error_state")->asUint() != 0) {
+            return PhaseSwitcherBackend::SwitchingState::Error;
+        }
+
+        uint32_t state = evse_common.low_level_state.get("phases_state")->asUint();
+
+        if (state != 0) {
+            return PhaseSwitcherBackend::SwitchingState::Busy;
+        }
+
+        return PhaseSwitcherBackend::SwitchingState::Ready;
+    }
+
+    bool EVSE::switch_phases(uint32_t phases_wanted)
+    {
+        if (phases_wanted > 3) {
+            logger.printfln("Invalid phases wanted: %lu", phases_wanted);
+            return false;
+        }
+
+        if (!can_switch_phases_now(phases_wanted)) {
+            logger.printfln("Requested phase switch but can't switch at the moment.");
+            return false;
+        }
+
+        phase_switcher.set_phases_requested(phases_wanted);
+
+        return true;
+    }
+
+    bool EVSE::is_external_control_allowed()
+    {
+        return !evse_common.management_enabled.get("enabled")->asBool();
+    }
+#else
+    uint32_t EVSE::get_phase_switcher_priority()                            { return 4; }
+    bool EVSE::phase_switching_capable()                                    { return false; }
+    bool EVSE::can_switch_phases_now(uint32_t phases_wanted)                { return false; }
+    uint32_t EVSE::get_phases()                                             { return 3; }
+    PhaseSwitcherBackend::SwitchingState EVSE::get_phase_switching_state()  { return PhaseSwitcherBackend::SwitchingState::Ready; }
+    bool EVSE::switch_phases(uint32_t phases_wanted)                        { return false; }
+    bool EVSE::is_external_control_allowed()                                { return false; }
+#endif
+

@@ -1,0 +1,21 @@
+{
+    "phase_switcher": {
+        "status": {
+            "cp": "Control Pilot",
+            "connected": "Verbunden",
+            "disconnected": "Getrennt",
+            "contactors_requested": "Schütze (angefordert)",
+            "contactors_active": "Schütze (aktiv)",
+            "contactor_names": "L1+N, L2+L3",
+            "off": "Aus",
+            "on": "Ein"
+        },
+        "navbar": {
+            "phase_switcher": "Phase Switcher"
+        },
+        "content": {
+        },
+        "script": {
+        }
+    }
+}

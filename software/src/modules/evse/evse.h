@@ -80,19 +80,22 @@ protected:
     //End IEvseBackend implementation
 
     // PhaseSwitcherBackend implementation
-    uint32_t get_phase_switcher_priority()                           override {return 4;}
-    bool phase_switching_capable()                                   override {return false;}
-    bool can_switch_phases_now(uint32_t phases_wanted)               override {return false;}
-    uint32_t get_phases()                                            override {return 3;}
-    PhaseSwitcherBackend::SwitchingState get_phase_switching_state() override {return PhaseSwitcherBackend::SwitchingState::Ready;} // Don't report an error when phase_switching_capable() is false.
-    bool switch_phases(uint32_t phases_wanted)                       override {return false;}
-    bool is_external_control_allowed()                               override {return false;}
+    uint32_t get_phase_switcher_priority() override;
+    bool phase_switching_capable() override;
+    bool can_switch_phases_now(uint32_t phases_wanted) override;
+    uint32_t get_phases() override;
+    PhaseSwitcherBackend::SwitchingState get_phase_switching_state() override;
+    bool switch_phases(uint32_t phases_wanted) override;
+    bool is_external_control_allowed() override;
 
     ConfigRoot user_calibration;
+    ConfigRoot phases_connected;
 
 private:
     ConfigRoot control_pilot_disconnect;
     ConfigRoot control_pilot_disconnect_update;
+
+    micros_t wait_after_cp_disconnect = 0_us;
 };
 
 #include "generated/module_available_end.h"
