@@ -149,7 +149,8 @@ let x = {
                 13: "Zählerüberwachung",
                 14: "Automatisierung",
                 15: "EEBUS",
-                16: "§14a EnWG"
+                16: "§14a EnWG",
+                17: "Phase Switcher"
             }[i];}/*NF*/,
 
             // EVSE V1 only
@@ -349,7 +350,8 @@ let x = {
                 13: "Zählerüberwachung",
                 14: "Automatisierung",
                 15: "EEBUS",
-                16: "§14a EnWG"
+                16: "§14a EnWG",
+                17: "Phase Switcher"
             }[i];}/*NF*/,
 
             "reboot_content_changed": "Ladeeinstellungen",

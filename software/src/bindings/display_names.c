@@ -68,6 +68,7 @@ const char *tf_get_device_display_name(uint16_t device_id) {
         case  288: return "Outdoor Weather Bricklet";
         case 2110: return "Particulate Matter Bricklet";
         case 2156: return "Performance DC Bricklet";
+        case 9002: return "Phase Switcher Bricklet";
         case 2145: return "Piezo Speaker Bricklet 2.0";
         case 2101: return "PTC Bricklet 2.0";
         case 2106: return "Real-Time Clock Bricklet 2.0";
