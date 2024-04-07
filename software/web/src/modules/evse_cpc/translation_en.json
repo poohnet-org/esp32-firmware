@@ -1,0 +1,16 @@
+{
+    "evse_cpc": {
+        "status": {
+            "cp": "Control Pilot",
+            "connected": "Connected",
+            "disconnected": "Disconnected"
+        },
+        "navbar": {
+            "evse_cpc": "Control Pilot"
+        },
+        "content": {
+        },
+        "script": {
+        }
+    }
+}
