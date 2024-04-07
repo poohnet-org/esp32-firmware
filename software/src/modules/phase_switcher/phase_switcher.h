@@ -19,14 +19,10 @@
 
 #pragma once
 
+#include "device_module.h"
 #include "config.h"
-#include "module.h"
 
 #include "bindings/bricklet_phase_switcher.h"
-
-#include "device_module.h"
-#include "phase_switcher_bricklet_firmware_bin.embedded.h"
-
 #include "../evse/control_pilot_backend.h"
 
 #if defined(__GNUC__)
@@ -45,8 +41,6 @@ enum class PhaseSwitchingState
 };
 
 class PhaseSwitcher final : public DeviceModule<TF_PhaseSwitcher,
-                                phase_switcher_bricklet_firmware_bin_data,
-                                phase_switcher_bricklet_firmware_bin_length,
                                 tf_phase_switcher_create,
                                 tf_phase_switcher_get_bootloader_mode,
                                 tf_phase_switcher_reset,
