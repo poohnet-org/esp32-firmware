@@ -122,24 +122,29 @@ int tf_evse_get_response_expected(TF_EVSE *evse, uint8_t function_id, bool *ret_
                 *ret_response_expected = (evse->response_expected[1] & (1 << 0)) != 0;
             }
             break;
-        case TF_EVSE_FUNCTION_SET_WRITE_FIRMWARE_POINTER:
+        case TF_EVSE_FUNCTION_SET_BOOST_CURRENT:
             if (ret_response_expected != NULL) {
                 *ret_response_expected = (evse->response_expected[1] & (1 << 1)) != 0;
             }
             break;
-        case TF_EVSE_FUNCTION_SET_STATUS_LED_CONFIG:
+        case TF_EVSE_FUNCTION_SET_WRITE_FIRMWARE_POINTER:
             if (ret_response_expected != NULL) {
                 *ret_response_expected = (evse->response_expected[1] & (1 << 2)) != 0;
             }
             break;
-        case TF_EVSE_FUNCTION_RESET:
+        case TF_EVSE_FUNCTION_SET_STATUS_LED_CONFIG:
             if (ret_response_expected != NULL) {
                 *ret_response_expected = (evse->response_expected[1] & (1 << 3)) != 0;
             }
             break;
-        case TF_EVSE_FUNCTION_WRITE_UID:
+        case TF_EVSE_FUNCTION_RESET:
             if (ret_response_expected != NULL) {
                 *ret_response_expected = (evse->response_expected[1] & (1 << 4)) != 0;
+            }
+            break;
+        case TF_EVSE_FUNCTION_WRITE_UID:
+            if (ret_response_expected != NULL) {
+                *ret_response_expected = (evse->response_expected[1] & (1 << 5)) != 0;
             }
             break;
         default:
@@ -222,32 +227,39 @@ int tf_evse_set_response_expected(TF_EVSE *evse, uint8_t function_id, bool respo
                 evse->response_expected[1] &= ~(1 << 0);
             }
             break;
-        case TF_EVSE_FUNCTION_SET_WRITE_FIRMWARE_POINTER:
+        case TF_EVSE_FUNCTION_SET_BOOST_CURRENT:
             if (response_expected) {
                 evse->response_expected[1] |= (1 << 1);
             } else {
                 evse->response_expected[1] &= ~(1 << 1);
             }
             break;
-        case TF_EVSE_FUNCTION_SET_STATUS_LED_CONFIG:
+        case TF_EVSE_FUNCTION_SET_WRITE_FIRMWARE_POINTER:
             if (response_expected) {
                 evse->response_expected[1] |= (1 << 2);
             } else {
                 evse->response_expected[1] &= ~(1 << 2);
             }
             break;
-        case TF_EVSE_FUNCTION_RESET:
+        case TF_EVSE_FUNCTION_SET_STATUS_LED_CONFIG:
             if (response_expected) {
                 evse->response_expected[1] |= (1 << 3);
             } else {
                 evse->response_expected[1] &= ~(1 << 3);
             }
             break;
-        case TF_EVSE_FUNCTION_WRITE_UID:
+        case TF_EVSE_FUNCTION_RESET:
             if (response_expected) {
                 evse->response_expected[1] |= (1 << 4);
             } else {
                 evse->response_expected[1] &= ~(1 << 4);
+            }
+            break;
+        case TF_EVSE_FUNCTION_WRITE_UID:
+            if (response_expected) {
+                evse->response_expected[1] |= (1 << 5);
+            } else {
+                evse->response_expected[1] &= ~(1 << 5);
             }
             break;
         default:
@@ -1707,6 +1719,123 @@ int tf_evse_get_boost_mode(TF_EVSE *evse, bool *ret_boost_mode_enabled) {
     _result = tf_tfp_finish_send(evse->tfp, _result, _deadline);
 
     if (_error_code == 0 && _length != 1) {
+        return TF_E_WRONG_RESPONSE_LENGTH;
+    }
+
+    if (_result < 0) {
+        return _result;
+    }
+
+    return tf_tfp_get_error(_error_code);
+}
+
+int tf_evse_set_boost_current(TF_EVSE *evse, uint16_t boost_current) {
+    if (evse == NULL) {
+        return TF_E_NULL;
+    }
+
+    if (evse->magic != 0x5446 || evse->tfp == NULL) {
+        return TF_E_NOT_INITIALIZED;
+    }
+
+    TF_HAL *_hal = evse->tfp->spitfp->hal;
+
+    if (tf_hal_get_common(_hal)->locked) {
+        return TF_E_LOCKED;
+    }
+
+    bool _response_expected = true;
+    tf_evse_get_response_expected(evse, TF_EVSE_FUNCTION_SET_BOOST_CURRENT, &_response_expected);
+    tf_tfp_prepare_send(evse->tfp, TF_EVSE_FUNCTION_SET_BOOST_CURRENT, 2, _response_expected);
+
+    uint8_t *_send_buf = tf_tfp_get_send_payload_buffer(evse->tfp);
+
+    boost_current = tf_leconvert_uint16_to(boost_current); memcpy(_send_buf + 0, &boost_current, 2);
+
+    uint32_t _deadline = tf_hal_current_time_us(_hal) + tf_hal_get_common(_hal)->timeout;
+
+    uint8_t _error_code = 0;
+    uint8_t _length = 0;
+    int _result = tf_tfp_send_packet(evse->tfp, _response_expected, _deadline, &_error_code, &_length, TF_NEW_PACKET);
+
+    if (_result < 0) {
+        return _result;
+    }
+
+
+    if (_result & TF_TICK_PACKET_RECEIVED) {
+        tf_tfp_packet_processed(evse->tfp);
+    }
+
+
+    if (_result & TF_TICK_TIMEOUT) {
+        _result = tf_tfp_finish_send(evse->tfp, _result, _deadline);
+        (void) _result;
+        return TF_E_TIMEOUT;
+    }
+
+    _result = tf_tfp_finish_send(evse->tfp, _result, _deadline);
+
+    if (_error_code == 0 && _length != 0) {
+        return TF_E_WRONG_RESPONSE_LENGTH;
+    }
+
+    if (_result < 0) {
+        return _result;
+    }
+
+    return tf_tfp_get_error(_error_code);
+}
+
+int tf_evse_get_boost_current(TF_EVSE *evse, uint16_t *ret_boost_current) {
+    if (evse == NULL) {
+        return TF_E_NULL;
+    }
+
+    if (evse->magic != 0x5446 || evse->tfp == NULL) {
+        return TF_E_NOT_INITIALIZED;
+    }
+
+    TF_HAL *_hal = evse->tfp->spitfp->hal;
+
+    if (tf_hal_get_common(_hal)->locked) {
+        return TF_E_LOCKED;
+    }
+
+    bool _response_expected = true;
+    tf_tfp_prepare_send(evse->tfp, TF_EVSE_FUNCTION_GET_BOOST_CURRENT, 0, _response_expected);
+
+    uint32_t _deadline = tf_hal_current_time_us(_hal) + tf_hal_get_common(_hal)->timeout;
+
+    uint8_t _error_code = 0;
+    uint8_t _length = 0;
+    int _result = tf_tfp_send_packet(evse->tfp, _response_expected, _deadline, &_error_code, &_length, TF_NEW_PACKET);
+
+    if (_result < 0) {
+        return _result;
+    }
+
+
+    if (_result & TF_TICK_PACKET_RECEIVED) {
+        TF_PacketBuffer *_recv_buf = tf_tfp_get_receive_buffer(evse->tfp);
+        if (_error_code != 0 || _length != 2) {
+            tf_packet_buffer_remove(_recv_buf, _length);
+        } else {
+            if (ret_boost_current != NULL) { *ret_boost_current = tf_packet_buffer_read_uint16_t(_recv_buf); } else { tf_packet_buffer_remove(_recv_buf, 2); }
+        }
+        tf_tfp_packet_processed(evse->tfp);
+    }
+
+
+    if (_result & TF_TICK_TIMEOUT) {
+        _result = tf_tfp_finish_send(evse->tfp, _result, _deadline);
+        (void) _result;
+        return TF_E_TIMEOUT;
+    }
+
+    _result = tf_tfp_finish_send(evse->tfp, _result, _deadline);
+
+    if (_error_code == 0 && _length != 2) {
         return TF_E_WRONG_RESPONSE_LENGTH;
     }
 

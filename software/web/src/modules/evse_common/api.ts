@@ -119,6 +119,10 @@ export interface boost_mode {
     enabled: boolean;
 }
 
+export interface boost_current {
+    current: number;
+}
+
 export interface identity {
     uid: string;
     connected_uid: string;

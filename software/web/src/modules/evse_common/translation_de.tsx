@@ -15,6 +15,7 @@ let x = {
             "error": "Fehler",
             "configured_charging_current": "Konfigurierter Ladestrom",
             "allowed_charging_current": "Erlaubter Ladestrom",
+            "boost_current": "Dynamischer Boost",
             "charge_control": "Ladesteuerung",
             "start_charging": "Start",
             "stop_charging": "Stop",
