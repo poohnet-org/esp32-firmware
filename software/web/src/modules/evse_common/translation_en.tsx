@@ -15,6 +15,7 @@ let x = {
             "error": "Error",
             "configured_charging_current": "Configured charging current",
             "allowed_charging_current": "Allowed charging current",
+            "boost_current": "Dynamic boost",
             "charge_control": "Charge control",
             "start_charging": "Start",
             "stop_charging": "Stop",

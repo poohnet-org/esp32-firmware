@@ -104,6 +104,7 @@ public:
     MeterValueAvailability get_value_ids_extended(uint32_t slot, MeterValueID *value_ids_out, size_t *value_ids_length);
     MeterValueAvailability get_values(uint32_t slot, const Config **values, micros_t max_age = 0_us);
     MeterValueAvailability get_values_with_cache(uint32_t slot, float *values, const uint32_t *index_cache, size_t value_count, micros_t max_age = 0_us);
+    MeterValueAvailability get_value_by_id(uint32_t slot, MeterValueID id, float *value, micros_t max_age = 0_us);
     MeterValueAvailability get_value_by_index(uint32_t slot, uint32_t index, float *value, micros_t max_age = 0_us);
     MeterValueAvailability get_power(uint32_t slot, float *power_w, micros_t max_age = 0_us);
     MeterValueAvailability get_energy_import(uint32_t slot, float *total_import_kwh, micros_t max_age = 0_us);

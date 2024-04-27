@@ -162,6 +162,16 @@ typedef struct TF_EVSE {
 /**
  * \ingroup TF_EVSE
  */
+#define TF_EVSE_FUNCTION_SET_BOOST_CURRENT 24
+
+/**
+ * \ingroup TF_EVSE
+ */
+#define TF_EVSE_FUNCTION_GET_BOOST_CURRENT 25
+
+/**
+ * \ingroup TF_EVSE
+ */
 #define TF_EVSE_FUNCTION_GET_SPITFP_ERROR_COUNT 234
 
 /**
@@ -764,6 +774,20 @@ int tf_evse_set_boost_mode(TF_EVSE *evse, bool boost_mode_enabled);
  * TODO
  */
 int tf_evse_get_boost_mode(TF_EVSE *evse, bool *ret_boost_mode_enabled);
+
+/**
+ * \ingroup TF_EVSE
+ *
+ * .. versionadded:: 2.2.0$nbsp;(Plugin)
+ */
+int tf_evse_set_boost_current(TF_EVSE *evse, uint16_t boost_current);
+
+/**
+ * \ingroup TF_EVSE
+ *
+ * .. versionadded:: 2.2.0$nbsp;(Plugin)
+ */
+int tf_evse_get_boost_current(TF_EVSE *evse, uint16_t *ret_boost_current);
 
 /**
  * \ingroup TF_EVSE

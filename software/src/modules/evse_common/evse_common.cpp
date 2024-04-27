@@ -129,8 +129,11 @@ void EvseCommon::pre_setup()
     boost_mode = enabled_cfg;
     boost_mode_update = boost_mode;
 
-    require_meter_enabled = enabled_cfg;
+    boost_current = Config::Object({
+        {"current", Config::Uint16(0)}
+    });
 
+    require_meter_enabled = enabled_cfg;
     require_meter_enabled_update = require_meter_enabled;
 
     meter_config = Config::Object({
@@ -353,6 +356,10 @@ void EvseCommon::setup()
     task_scheduler.scheduleUncancelable([this](){
         backend->update_all_data();
     }, 250_ms);
+
+    task_scheduler.scheduleUncancelable([this](){
+        this->update_boost_current();
+    }, 30_s, 30_s);
 
 #if MODULE_POWER_MANAGER_AVAILABLE()
     power_manager.register_phase_switcher_backend(backend);
@@ -666,6 +673,8 @@ void EvseCommon::register_urls()
     api.addCommand("evse/boost_mode_update", &boost_mode_update, {}, [this](Language /*language*/, String &/*errmsg*/) {
         backend->set_boost_mode(boost_mode_update.get("enabled")->asBool());
     }, true);
+
+    api.addState("evse/boost_current", &boost_current);
 
     api.addState("evse/auto_start_charging", &auto_start_charging);
     api.addCommand("evse/auto_start_charging_update", &auto_start_charging_update, {}, [this](Language /*language*/, String &/*errmsg*/) {
@@ -1094,4 +1103,44 @@ bool EvseCommon::get_management_enabled()
 uint32_t EvseCommon::get_evse_version()
 {
     return hardware_configuration.get("evse_version")->asUint();
+}
+
+void EvseCommon::update_boost_current()
+{
+    if (api.hasFeature("meter") && boost_mode.get("enabled")->asBool()) {
+        uint16_t actualCurrent = 0;
+        MeterValueID valueIds[3] = {MeterValueID::CurrentL1ImExSum, MeterValueID::CurrentL2ImExSum, MeterValueID::CurrentL3ImExSum};
+
+        for (uint16_t index = 0; index < 3; index++) {
+            float current = 0.0;
+
+            if (meters.get_value_by_id(this->get_charger_meter(), valueIds[index], &current) == MeterValueAvailability::Fresh) {
+                if (!isnan(current)) {
+                    actualCurrent = MAX(actualCurrent, static_cast<uint16_t>(current*1000));
+                }
+            }
+        }
+
+        if (actualCurrent >= 5000) {
+            uint16_t boostCurrent = backend->get_boost_current();
+            uint16_t allowedCurrent = state.get("allowed_charging_current")->asUint();
+
+            if ((actualCurrent < 0.99*allowedCurrent) && (boostCurrent < 1200)) {
+                boostCurrent += 120;
+            }
+            else if ((actualCurrent > 1.02*allowedCurrent) && (boostCurrent >= 120)) {
+                boostCurrent -= 120;
+            }
+
+            boostCurrent = MAX(0, MIN(boostCurrent, 1200));
+
+            if (boostCurrent != backend->get_boost_current()) {
+                backend->set_boost_current(boostCurrent);
+                logger.printfln("%d mA is allowed, but actual current is %d mA. Setting boost current to %d mA.", allowedCurrent, actualCurrent, boostCurrent);
+            }
+        }
+        else {
+            backend->set_boost_current(0);
+        }
+    }
 }

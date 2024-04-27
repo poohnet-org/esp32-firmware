@@ -67,6 +67,9 @@ protected:
 
     void set_boost_mode(bool enabled) override;
 
+    void set_boost_current(uint16_t boost_current) override;
+    uint16_t get_boost_current() override;
+
     int get_charging_slot(uint8_t slot, uint16_t *ret_current, bool *ret_enabled, bool *ret_reset_on_dc) override;
     int set_charging_slot(uint8_t slot, uint16_t current, bool enabled, bool reset_on_dc) override;
     void set_charging_slot_max_current(uint8_t slot, uint16_t current) override;
