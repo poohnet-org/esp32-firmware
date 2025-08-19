@@ -1,0 +1,1058 @@
+2021-09-08: 1.0.0 (231b34d5)
+- Initial release
+
+2021-09-13: 1.0.1 (2e3f4fb2)
+- Fix shutdown input texts in EVSE page
+- Add connected phases to meter page
+- Add missing detailed meter value
+
+2021-10-07: 1.0.2 (c14f6e72)
+- Remove factory reset with button
+- Fix WiFi AP deactivation
+- Fix bug in "stop charging by button"-configuration that can lead to unstoppable charge state
+  (through EVSE 2.0 Bricklet firmware 2.0.4)
+- Fix energy meter module initialization
+- Fix EVSE 2.0 button configuration
+- Always log MQTT disconnect and error messages
+- Improve browser language detection
+- Add missing ADC values and voltages to low level state
+
+2021-10-29: 1.1.0 (b8aaf037)
+- Rework charge management
+- Replace MQTT implementation
+- Improve forwards and backwards compatibility of configurations
+- Reduce web socket log spam
+- Redesign event log page layout
+- Merge debug report and event log
+- Add button state API
+- Show only max supported current as charging current on status page
+- Add reset button for configured current
+- Fix energy meter configuration issue (through EVSE 2.0 Bricklet firmware 2.0.5)
+
+2021-12-03: 1.1.1 (7f46460f)
+- Remove authentication log spam
+- Improve translations
+- Migrate to LittleFS
+- Allow adding NFC cards and managed chargers by pressing return
+- Fix bug where an empty web interface was shown
+- Reset managed current watchdog when updated over the API
+- Add recovery page
+- Add warning before downgrades
+- Log more network events
+- Improve active/connected phase detection (through EVSE 2.0 Bricklet firmware 2.0.6)
+- Improve vehicle connected detection in case of error on startup (through EVSE 2.0 Bricklet firmware 2.0.6)
+
+2022-01-10: 1.1.2 (d365e548)
+- Don't allow empty client ID in MQTT
+- Add waking up chargers that already charged once (charge management)
+- Increase active phase threshold to 300 mA (through EVSE 2.0 Bricklet firmware 2.0.7)
+- Allow firmware update if vehicle state is error
+- Make web interface usable for screens with 320 to 360 px width
+- Warn when activating authentication that a password reset can only be done by resetting to factory defaults
+- Improve web UI of authentication, event log, WiFi and MQTT configuration
+- Link to correct manual
+- Fix web server hang if a client can not be reached anymore
+- Hide unfinished control pilot configuration for now
+- Reimplement exponential backoff for WiFi connection attempts
+
+2022-02-22: 1.9.90 (847565a4)
+- 2.0.0 Beta 1
+- Break API
+- Use charging slots to decouple NFC and other controls (through EVSE 2.0 Bricklet firmware 2.1.1)
+- Add NTP time sync prototype
+- Add user management
+- Add charge tracker
+- Map NFC tags to users
+- Add network subcategory and module to configure hostname
+- Use same hostname for all network interfaces
+- Rework current configuration UI
+- Merge login page and main page
+- Fix WebSocket connection loss caused by wrong PING handling
+- Fix browser caching
+- Fix firmware compilation on Windows and macOS
+- Log WiFi MAC address
+- Add greyed out bars and RSSI alt text to WiFi reception icon
+- Log reboot reason
+- Allow passing integer values for float API values
+- Use strings in APIs for NFC tag ids and IP addresses
+
+2022-03-08: 1.9.91 (0795b7de)
+- 2.0.0 Beta 2
+- Optimize user modification
+- Add features API
+- Add delay to prevent accidental charge stops immediately after a start via NFC
+- Allow passing the value of single-member commands directly
+- Accept falsy values for null configs
+- Fix handling of missing meter on charge start and end
+- Add configurable send interval to MQTT
+- Add longer list of last charges to charge tracker page
+- Show latest charge first in list of last charges
+- Add user and time filters to charge tracker page
+- Add editable name UI to web interface
+- Add NTP page
+- Fix reported heap sizes in debug report
+- Move misc APIs to info/
+
+2022-03-14: 1.9.92 (5cf222bd)
+- 2.0.0 Beta 3
+- Add NTP timezone lookup
+- Fix MQTT not publishing to some topics
+- Add username to charge log
+- Enforce unique usernames
+- Don't allow enabling HTTP Auth if no user with password is configured
+- Report correct EVSE version
+- Scroll back to top when changing sub-page
+- Improve translations
+
+2022-03-22: 1.9.93 (98b7afb7)
+- 2.0.0 Beta 4
+- Refine new API
+- Add configuration migration
+- Add warning when disabling the WiFi AP
+- Fix WebSocket connections through SSL proxy
+- Fix charge tracker edge cases
+- Fix web interface error message hide logic
+- Fix MQTT payload length limit calculation
+- Fix spurious firmware update flash failures
+- Fix crash when starting without plugged in EVSE
+
+2022-04-06: 2.0.0 (a019ae6c)
+- Add remove all charges: Removes tracked charges but keeps configuration
+- Add config reset: removes configuration but keeps tracked charges
+- Rework UI of cards used for chargers, tags and users
+- Fix passphrase requirement when configuring another AP of the same network
+- Improve translations
+- Improve users modification performance and robustness
+- Fix event log sometimes not being shown
+- Add default NTP servers
+- Enforce unique usernames in configuration and tracked charges
+- Add usable anchors and support browser history
+- Fix tracked charge change triggered by ESP reset
+- Allow switching to another NFC tag while vehicle is plugged in
+- Add charge manager watchdog hint
+
+2022-04-07: 2.0.1 (6d9c2bfc)
+- Fix user modification
+- Fix left-over usernames when resetting config
+- Fix HTTP auth not being enabled when a password is added to a user
+
+2022-05-02: 2.0.2 (ebe864c7)
+- Completely rework WebSocket connection handling
+- Add NFC tag injection for start or stop
+- Add API to inject energy meter values
+- Add support for SDM72DM V2 (through EVSE 2.0 Bricklet firmware 2.1.3)
+- Factory reset EVSE when factory or config reset is triggered (through EVSE 2.0 Bricklet firmware 2.1.3)
+- Make web interface sub-page headers sticky
+- Move "Save" button into sticky headers
+- Fix sub-page scroll to top in Chrome
+- Fix downloading an empty charge log
+- Fix boolean values in charge log
+- Fix bootloop if Ethernet and WiFi are completely disabled
+
+2022-05-02: 2.0.3 (9725085b)
+- Fix visibility of WiFi scan results
+
+2022-05-04: 2.0.4 (70af7ef1)
+- Fix race condition resulting in unusable web interface
+
+2022-05-13: 2.0.5 (bce0b522)
+- More WebSocket fixes
+- Improve button/key stop logic (through EVSE 2.0 Bricklet firmware 2.1.4)
+- Fix initialized flag not being set for some modules
+- Fix not clearing last_seen NFC tag ids
+- Make sure HTTP authentication can never be enabled if no user with password is configured
+- Fix WiFi scan sometimes not starting
+- Select unoccupied channel when starting WiFi AP
+- Fix LED blink when waiting for not user-related charge release
+
+2022-06-07: 2.0.6 (e66e4e51)
+- Increase WiFi scan timeout for AP channel selection
+- Fix form validation display on success
+- Add NTP state and synced time to status page
+- Make sure to never start charging when button is pressed (through EVSE 2.0 Bricklet firmware 2.1.5)
+- Fix compatibility with some SDM630 versions (through EVSE 2.0 Bricklet firmware 2.1.5)
+
+2022-06-09: 2.0.7 (c5b8c584)
+- Fix memory leak in WebSocket queue cleanup
+- Fix wrongly detecting an SDM630 if no energy meter is connected (through EVSE 2.0 Bricklet firmware 2.1.6)
+
+2022-09-14: 2.0.8 (3eb8c6ac)
+- Rework charge manager configuration UI
+- Add charger auto-detection via mDNS to charge manager
+- Add host name resolution to charge manager
+- Add staged factory reset via front panel button
+- Allow renaming the unknown user
+- Improve resolution of communicated current (through EVSE 2.0 Bricklet firmware 2.1.7)
+- Add minimum delay of 30s between error and charging states (through EVSE 2.0 Bricklet firmware 2.1.7)
+- Fix PP/PE voltage reported in EVSE low level state (through EVSE 2.0 Bricklet firmware 2.1.7)
+- Improve recovery page
+- Allow forcing a firmware update via the recovery page
+- Allow HTTP POST for commands
+- Allow HTTP GET/POST for payload-less commands
+- Support config updates without "_update" suffix (only via HTTP)
+- Check static IP configuration for common mistakes
+- Fix energy meter x-axis labels on really small screens
+- Fix WebSockets blocking the web server if a connection stays active over weeks
+- Fix duplicated NFC tag detections
+- Add reboot hint when removing all charges
+- Show spinner if saving the user config takes a long time
+- Fix HTTP error when sending tracked charges
+- Print reason for last firmware restart to event log
+- Add uptime tracker for debug purposes
+- Fix user ID overflow
+- Block creating new users if all IDs are in use
+- Reflash Bricklets stuck in bootloader mode
+- Fix status page showing up before the correct sub-page when reloading the web interface
+- Update timezone database
+- Fix manual and firmware URLs
+- Move "require user authorization to charge" to users sub-page
+- Improve translations
+
+2022-09-14: 2.0.90 (54cb4e17)
+- OCPP Beta 1
+
+2022-11-17: 2.0.91 (c8d2c30f)
+- OCPP Beta 2
+- Add OCPP debug info
+- Add OCPP smart charging profile
+- Fix OCPP bugs
+- Fix error message if firmware update is too small
+- Retry flashing Bricklets once; continue gracefully if this fails
+- Improve firmware update error handling in web interface
+- Improve network timeout handing in web interface
+- Disable current reset buttons if already 32A
+- Update timezone database
+- Add Modbus TCP
+- Add WireGuard
+- Add RTC support (via Real Time Clock 2.0 Bricklet)
+- Improve translations
+- Add "are you sure"-dialog to meter reset
+- Fix EVSE low level value labels
+- Fix HTTP GET for payload-less commands
+- Fix losing current limits when reenabling already enabled slot
+- Make button and GPIO configuration persistent (through EVSE 2.0 Bricklet firmware 2.1.8)
+- Add EVSE communication watchdog (through EVSE 2.0 Bricklet firmware 2.1.8)
+
+2022-11-25: 2.0.9 (9dbdd9f5)
+- (Disable OCPP and Modbus TCP for non-beta firmware)
+- Add config reset API
+- Add reset button to configuration pages
+- Improve translations
+- Add electricity price configuration; show cost of charge in web interface and charge log
+- Show cost of charge in web interface and charge log
+- Fix firmware hanging after 2^32 ms (~ 49 days 17 hours)
+- Web interface: Allow saving if only a +/- button was clicked
+- Fix softAP as fallback not starting correctly
+- Fix deserialization errors not being returned via HTTP
+- Fix evse/(start/stop)_charging behaviour if not connected
+
+2022-11-25: 2.0.92 (a5bdcf66)
+- OCPP Beta 3
+- (Re-enable OCPP and Modbus TCP)
+
+2022-11-28: 2.0.10 (7b54347e)
+- (Disable OCPP and Modbus TCP for non-beta firmware)
+- Fix hidden_proxy used in provisioning
+
+2022-12-16: 2.0.11 (023a279e)
+- Add Modbus TCP
+- Fix repeated WiFi scans taking a long time
+- Fix optional DNS servers in static IP configuration
+- Improve API payload parsing performance
+- Improve API error messages
+- Fix WiFi RSSI alt text
+- Add watchdog protecting against WebSocket and EVSE communication failure
+- Fix NTP servers with short names/IPs
+- Don't require second NTP server to be set
+- Fix charge management mDNS log spam if mDNS is disabled
+- Fix config migrations from pre-2.0.0 firmwares
+- Fix config reset
+- Use freshly build bootloader in merged firmware
+- Update timezone database
+- Fix deletion of unsaved users
+
+2022-12-22: 2.0.93 (3bff8d7f)
+- OCPP Beta 4
+- (Re-enable OCPP)
+- Improve API error messages
+- Show multiple API errors in one response
+- Fix user configuration validation
+- Add NFC tag if exactly one tag was seen
+- Fix login page being shown if login check times out
+- Fix user API being blocked until reboot on error
+- Fix charge manager current configuration interdependencies
+- Improve WiFi connection establishment speed
+- Add support for OCPP basic authentication
+- Add boost mode (through EVSE 2.0 Bricklet firmware 2.1.9)
+- Add EV wakeup (through EVSE 2.0 Bricklet firmware 2.1.9)
+- Fix CP disconnect API (through EVSE 2.0 Bricklet firmware 2.1.9)
+- Make sure contactor is not turned off under load (through EVSE 2.0 Bricklet firmware 2.1.9)
+- Silence confusing web socket error message
+
+2023-02-28: 2.1.0 (17f4001d)
+- Add finished OCPP implementation
+- Send NFC tag IDs without ':' to OCPP server
+- Improve OCPP basic auth support
+- Fix OCPP connections without basic auth
+- Fix OCPP servers unexpectedly closing connections by sending web socket pings
+- Add OCPP status bar
+- Send Energy.Active.Import.Register via OCPP by default
+- Add PDF export for charge logs
+- Add CSV export flavors
+- Reorganize web interface menu structure
+- Split EVSE subpage into status and settings subpages
+- Move auto start charging into EVSE settings
+- Replace charge management protocol with new forwards-compatible version
+- Replace meter graph implementation
+- Improve translations
+- Add API to retrieve core dump
+- Add watchdog protecting against firmware lock-ups
+- Fix WiFi not allowing configuration to be saved if only the selected network has changed
+- Fix float configuration values being dropped if configuration is saved by pressing enter in float input
+- Fix charge manager, NFC and users modal form submission
+- Add check for reserved, broadcast and multicast IP addresses in charge manager configuration
+- Fix charge manager error duration not increasing if all chargers don't send packets anymore
+- Fix start/end date selection of charge tracker log export not considering the user's timezone
+- Fix status page label widths
+- Change default NTP server for improved reliability
+- Fix RTC time handling
+- Fix charged energy register in Modbus/TCP Keba emulation mode
+- Don't report contactor check error in case of emergency shutdown (through EVSE 2.0 Bricklet firmware 2.1.10)
+- Don't set energy meter configuration continuously (through EVSE 2.0 Bricklet firmware 2.1.10)
+- Fix last meter value always being reported as 0 (through EVSE 2.0 Bricklet firmware 2.1.10)
+
+2023-03-16: 2.1.1 (854dbe3c)
+- Add MQTT auto discovery for Home Assistant and compatible systems
+- Add time and energy limits for charging
+- Add core dump to debug report
+- Scale meter graphs to always span at least 100 W
+- Fix first four minutes of meter live graph
+- Fix charged sum calculation being wrong if charges without start date were tracked before the selected interval
+- Fix charge tracking values if power-cycled
+- Fix error feedback of text inputs
+- Fix WiFi station passphrase placeholder text
+- Fix deletion of WiFi station passphrase
+- Fix negative and large energy plot values
+- Fix length check of text and password inputs
+- Make Bricklet flashing more robust
+- Improve translations
+- Make managed chargers on status page clickable links
+- Check if configured charger hosts have duplicates
+- Filter out mDNS responses not created by WARP Chargers
+- Resolve .local hostnames via mDNS scan
+- Remove stale RSSI and IP values if WiFi connection is lost
+- Add current limit options to GPIO input (through EVSE 2.0 Bricklet firmware 2.1.11)
+- Fix charge log stopping after 60 seconds
+- Improve MQTT error messages
+
+2023-04-14: 2.1.2 (388902cd)
+- Add unique object_id to MQTT auto discovery entries
+- Add EVSE coils to Modbus TCP
+- Add fill to meter plot
+- Make web interface listen port configurable
+- Improve WiFi reception by disabling HT40 mode and 11b
+- Make energy meter initialization more robust
+- Fix charge manager distribution log access if verbose not requested
+- Make static IP configuration of Ethernet interface more reliable
+- Fix removal of controlled charger in charge manager sub-page
+- Improve translations
+- Fix charge limit blocking a charge forever
+- Update timezone database
+- Log connection duration when Ethernet, WiFi, MQTT or WireGuard connection is lost
+- Fix OCPP not reconnecting if a TLS connection was closed by the server immediately after establishing it
+- Reset energy meter only once if requested via Modbus TCP
+- Make sure action requests are never ignored if requested via Modbus TCP
+- Fix broken status page links if charge manager config is changed but not applied
+- Relax PDF download timeout
+- Relax MQTT message timeout
+- Allow clicking stop on status page if charger is blocked on another slot
+- Show error if electricity price is obviously wrong
+
+2023-06-23: 2.1.3 (0771049a)
+- Add PWA-style bookmark support
+- Add option to require up-to-date meter value when starting a charge; automatically enabled the first time a meter is found
+- Add automatic DC fault protector test after each charging session and at least every 24 hours (EVSE 2.0 Bricklet firmware 2.1.13)
+- Make sure active CP disconnect can not be turned off again through API from external (EVSE 2.0 Bricklet firmware 2.1.13)
+- Make sure meter type is only reconfigured once per complete read of register set (EVSE 2.0 Bricklet firmware 2.1.13)
+- Reset local timeout counter when meter is found for the first time (EVSE 2.0 Bricklet firmware 2.1.13)
+- Improve charge management efficiency by using line currents if available
+- Add button to trigger a test of the DC fault protector
+- Add last seen NFC tag to Modbus TCP
+- Add API and Modbus TCP registers to control front button LED
+- Add evse/gp_output(_update) API to set GP output without flash wear
+- Add identity API to device modules
+- Add charging slots to EVSE debug protocol
+- Don't count unknown user against the limit of 16 users
+- Remove NetBIOS support
+- Update timezone database
+- Increase DNS cache size
+- Re-resolve controlled charger hostnames when unresponsive
+- Improve charge manager performance when controlling ten chargers
+- Fix Ethernet log messages
+- MQTT auto discovery: Add availability flag to current limit
+- Improve Modbus TCP type documentation
+- Fix localization of float numbers in web interface
+- Improve IP configuration robustness on 10MBit Ethernet connections
+- Show EVSE firmware and hardware version
+- Make sure downgrades (to at least this firmware) will work if new charging slots are added in the future
+- Fix charge management scan list order changing and containing duplicated entries
+- Fix API states sporadically missing some entries
+- Fix user authentication being lost if ESP restarts while charge is paused
+- Repair charge records with either the start or end meter value missing
+- Fix crash if NFC logic is blocked for more than one second
+- Increase NFC detection threshold to two seconds; should make duplicated detection less likely
+- Make local charger link clickable
+- Check for overlapping networks between Ethernet, WiFi or WireGuard IPs
+- Improve translations
+- Immediately start WiFi AP if no WiFi configured and Ethernet disabled or not plugged in
+- Improve zero line visibility
+- Consistently scale all 48h graphs to at least 1500 W
+- Don't log if optional devices are missing
+- Clarify event log messages
+- Fix race condition in web server initialization
+- Fix charge manager handling of low priority chargers
+- Handle chargers that only support less than the minimum current as low priority
+- Fix ESP crash when accessing API concurrently
+- Fix web interface errors caused by wrong web socket message order
+- Fix race condition in MQTT initialization
+- Fix non-UTF-8 web socket payload by clamping sampled meter values into expected range
+- Fix wrong meter history calculation if samples arrive faster than every 500 ms
+- Limit debug protocol to last 20000 lines
+- Fix y-axis jump on double click in graphs
+- Auto-scale graph y-axis based on tick text width
+
+2023-08-23: 2.1.4 (2efbe7c5)
+- Add y-axis label to meter plot
+- Fix loading of RTC time on Sundays
+- Show firmware build time in human readable format
+- Add subnet mask to WiFi and network state
+- Allow full subnet mask (/0 to /32) for WireGuard
+- Fix serialization mismatch between current_charge and last_charges
+- Fix NFC tag injection API in case of injecting a tag that has already been seen before
+- Remove unnecessary release button from global current slot
+- Stop using disabled items in InputSelect as placeholder
+- Don't blink LED if user slot is not active
+- Fix handling of fast OCPP disconnect
+- Switch from cards to table in charge manager, NFC and users UI
+- Fix recovery API call payloads
+- Fix invalid feedback if no subnet mask is selected
+- Fix SDM630/72V2 inconsistencies in OCPP module
+- Fix potential deadlock when calling API commands
+- Fix handling of missing line currents in charge manager resulting in too low charging currents
+- Fix API meter not updating last_value_change
+- Don't check for DC fault when contactor is turned off (through EVSE 2.0 Bricklet firmware 2.1.14)
+- Fix boost mode after startup (through EVSE 2.0 Bricklet firmware 2.1.14)
+- Wait for at least 30 seconds until contactor is turned on again after leaving state D (through EVSE 2.0 Bricklet firmware 2.1.14)
+- Wait for at least 5 seconds until contactor is turned on again after charging was stopped (through EVSE 2.0 Bricklet firmware 2.1.14)
+- Fix WireGuard crashing after a multiple of 7 days
+
+2023-10-30: 2.1.5 (720dd21d)
+- Fix Ethernet and WiFi alternative DNS server config
+- Correctly mark Ethernet and WiFi DNS server and alternative NTP server as optional
+- Fix recovery page API call instructions
+- Improve OCPP connection reliability
+- Fix MQTT subscriptions being dropped after (re)connect
+- Reset EVSE external slot to 32 A when enabling
+- Improve OCPP UI and debug output
+- Make sure config resets and other actions are not triggered by non-conforming MQTT brokers
+- Fix dropped MQTT subscriptions and publishes on (re-)connect
+- Fix race-conditions when calling API at the same time via different backends
+- Improve flash performance
+- Immediately show event log messages in web interface
+- Collect event log in web interface
+- Auto scroll event log if scrolled down to bottom
+- Work around Firefox table width calculation bug
+- Check that entered IP addresses are not network or broadcast addresses
+- Add TLS certificate management. Use for OCPP connections
+- Improve Translations
+- Improve WebSocket connection establishment reliability and performance
+- Fix reverse proxy support
+- Don't draw zero line outside plot area
+
+2023-12-21: 2.1.90 (96c641c6)
+- 2.2.0 Beta 1
+- Add automation
+- Add WPA Enterprise EAP-TLS, EAP-PEAP and EAP-TTLS support
+- Add SunSpec meter/inverter support
+- Rework meter handling. Support 2 energy meters. Add meters API
+- Add configurable API meter
+- Support Eltako DSZ15DZMOD and YTL DEM4A (through EVSE 2.0 Bricklet firmware 2.2.0)
+- Add resettable import/export energy values
+- Use import energy for charge tracker etc. Switch over when factory resetting or removing all tracked charges
+- Support up to 32 managed chargers, NFC tags and users
+- Add API to restart charge limits
+- Add event log message when meter becomes stuck or unreachable
+- Add warning to event log if Ethernet and WiFi station are used at the same time
+- Add OCPP transaction ID to sent meter values
+- Improve translations
+- Improve charge manager packet burst robustness
+- Improve performance when sending lots of data over MQTT
+- Improve OCPP UI
+- Improve WiFi softAP performance while connecting to WiFi network
+- Improve error feedback in web interface forms
+- Improve DC fault sensor UI. Support X804. (through EVSE 2.0 Bricklet firmware 2.2.0)
+- Improve diode detection (through EVSE 2.0 Bricklet firmware 2.2.0)
+- Separate Contactor/PE errors
+- Show hint if capslock is enabled when entering passwords
+- Remove support of TLS versions older than 1.2
+- Keep WiFi softAP open for five minutes if connection establishment takes some time
+- Make sure to connect to AP with best RSSI
+- Allow /24 to /30 subnets for softAP
+- Charge manager: Don't distribute current if not all chargers are known yet
+- Make sure that WiFi HT40 mode is always disabled
+- Fix RFID tag registers in Keba emulation when no energy meter is available
+- Fix web interface labels referencing non-existing IDs
+- Fix modification of certificates
+- Fix NFC tag to user mapping on boot-up
+- Fix 0% progress bar width
+- Fix missing "average line to neutral voltage"-value of SDM72DMV2
+- Fix browser's back button not working when accessing web interface main page
+- Fix date input keyboard entry
+- Fix reported range of external current in MQTT auto discovery
+
+2024-01-24: 2.2.0 (32abaf21)
+- Update timezone database
+- Show maximum number of tracked charges
+- Report meters feature if at least one meter declared its value IDs
+- Fix meter/live and meter/history (legacy API)
+- Fix charge manager available current watchdog triggering continuously
+- Allow cron action to set status LED without external LED control enabled
+- Allow setting status LED via API while charging (through EVSE 2.0 Bricklet firmware 2.2.0)
+- Don't immediately block charging when external slot gets enabled (through EVSE 2.0 Bricklet firmware 2.2.0)
+- Make sure that the diode check is only run if at least one negative PWM value has been measured (through EVSE 2.0 Bricklet firmware 2.2.1)
+
+2024-02-12: 2.2.1 (a0f9964c)
+- Make generation of first web socket frame more memory efficient
+- Don't report vendor specific SunSpec models as unknown
+- Fix hanging SunSpec discovery under specific error conditions
+- Abort SunSpec discovery when web interface is closed
+- Make SunSpec discovery process more robust against connection loss
+- Fix HTTP API causing errors if receiving payload is slow
+- Update timezone database
+- Fix OCPP responses not being sent
+- Fix OCPP LED control
+- Show OCPP tag rejections in web interface
+- Fix OCPP transaction message recovery across reboots
+- Fix OCPP sending StopTransaction.reqs with wrong meter values when restarting while a transaction is in progress
+- Fix DC fault detection triggering spuriously (through EVSE 2.0 Bricklet firmware 2.2.2)
+
+2024-04-05: 2.3.0 (a2116460)
+- Add PV excess charging
+- Add second longer CP disconnect if vehicle does not react within 30 seconds (through EVSE 2.0 Bricklet firmware 2.2.3)
+- Add "Limit to 4200 W (§14 EnWG) on open/close" setting for shutdown input (through EVSE 2.0 Bricklet firmware 2.2.3)
+- Add configuration of supply connected phases; used to calculate 4200 W limit (through EVSE 2.0 Bricklet firmware 2.2.3)
+- Add MQTTS and MQTT over WS(S) support
+- Add HTTP automation trigger
+- Add modal for WiFi scan results
+- SunSpec: Support multiple devices in one register set
+- SunSpec: Support multiple instances of the same model in one device
+- SunSpec: Improve boot scan robustness
+- SunSpec: Fix power factor scaling
+- WiFi Enterprise: Fix EAP-TLS connections with client key
+- Fix low entropy of boot ID
+- Fix network config reset via front button not disabling the HTTP authentication
+- Fix DSZ15DZMOD support of legacy API
+- Don't attempt to repair tracked charge if meter reported exactly 0 kWh before and after the charge
+- Fix automatic channel selection of soft AP
+- Fix phases not being shown as active if phase current is over threshold but negative (grid feed)
+- Fix OCPP crashes if never used before firmware 2.2.1
+- Improve latency of power and phase current values of the attached energy meter
+- Reduce charge manager control cycle to 5 seconds
+- Double charge manager current margin if exactly one charger is active
+- Print module in event log messages
+- Reorganize web interface menu structure
+- Split charge management settings in chargers (also used for PV excess charging) and settings subpages
+- Unify label/content split of status and other subpages
+- Show placeholder if RTC time is not set
+- Show disabled automation actions
+- Improve translations
+
+2024-05-28: 2.4.0 (4c292c70)
+- Add SMA Speedwire as new meter type
+- Add Modbus TCP as new meter type
+- Support up to 5 configured energy meters
+- Add more meter history plot zoom levels
+- SunSpec: Add support for DER models 701, 713 and 714
+- SunSpec: Add quirk for inverted SolarEdge power values
+- SunSpec: Improve Sungrow compatibility
+- SunSpec: Remove misleading phase information from model names
+- SunSpec: Improve discovery robustness
+- Allow to re-enable 802.11b mode to improve WiFi reception
+- Fix NTP server configuration via DHCP
+- Fix showing 0 W on status page if no data is available
+- Fix duplicated charge mode switching not immediately allowing charge start
+- Fix EVSE LED API names
+- Fix MQTT showing as deactivated before first connection attempt
+- Fix missing Modbus TCP discrete input for (unimplemented!) cp_disconnect
+- Fix WiFi scan not showing as completed if no WiFi was found
+- Fix network config reset via front button not resetting web interface listen port and hostname
+- Fix automatic web interface reload on firmware version change
+- Fix reported WiFi reception quality when not connected
+- Fix EVSE LED automation action
+- Fix charge stop via web interface and front button not blocking charge when in state "ready to charge" (through EVSE 2.0 Bricklet firmware 2.2.4)
+- OCPP: Fix MeterValue timestamps
+- Don't require login before sending main page to Safari
+- Reset charge limit targets if overridden with "unlimited"
+- Update default NTP servers
+- Improve NTP sync speed
+- Don't overwrite fresh NTP synced time with probably older RTC time
+- Improve web server robustness
+- Disable gratuitous ARP
+- Disable trusting sender of IP packets for ARP
+- Disable TLS elliptic curves smaller than the required default of 256
+- Improve translations
+- Document new meter types used in Modbus TCP input register 2000
+- Improve Modbus TCP documented register ranges and types
+- Allow up to 2kb of HTTP request headers
+
+2024-07-24: 2.4.1 (2b99ba4c)
+- Add support for more Modbus TCP devices: Alpha ESS SMILE, Shelly Pro (3)EM
+- Fix Sungrow register table
+- Allow charging in fast mode if PV excess meter values are not available
+- Fix charge manager ramp-up phase
+- Improve Modbus TCP register table documentation
+- Fix web server hanging forever if wait for energy analysis data timed out
+- Close network connections before reboot
+- Fix charge limits energy override
+- Generate some meter values if energy meter does not report them
+- Fix MQTT errors sometimes not being reported to event log
+- Fix charge tracker percentage used calculation
+- Fix charge log PDF title
+- Speed up charge log PDF generation
+- Fix meter value overflows
+
+2024-08-29: 2.5.0 (60ada225)
+- Add firmware update check and download
+- Add remote access
+- Add configurable time that NFC tags are ignored for after authorizing a charge start
+- Add front panel LED blink on ESP restart
+- Sign firmware updates
+- Improve OCPP authentication compatibility
+- Fix charge manager allocating more than 32 A to a charger
+- Fix PDF generation of empty charge logs
+- Fix focus loss when starting to edit device display name
+- Fix localization of names of downloaded files
+- Fix long SSIDs overflowing the web interface layout
+- Show error message if recovery page failed to start factory reset
+- Fix MQTT automation rules with prefix
+- Fix missing power graph for Victron Energy GX grid meter
+
+2024-09-06: 2.6.0 (9d8169d3)
+- Rewrite charge manager: Manage phases individually
+- Add dynamic load management
+- Support PV excess charging with more than one charger
+
+2024-09-19: 2.6.1 (bc58e3ee)
+- Add support for more Modbus TCP devices: GoodWe Hybrid Inverter
+- Fix remote access registration with Safari
+- Improve remote access registration UI
+- Improve add meter modal UI
+- Only show meter plot on status page if meter is connected
+- Fix charge manager not detecting vehicle as full if charge did start with an A -> C transition (through EVSE 2.0 Bricklet firmware 2.2.6)
+
+2024-12-02: 2.6.2 (120d8bd2)
+- Add passive battery storage support for PV excess charging
+- Add support for NFC type 5 tags (through NFC Bricklet firmware 2.1.0)
+- Add system language setting (currently used to translate MQTT auto discovery topics)
+- Add support for RCT Power hybrid inverters
+- Add support for more Modbus TCP devices: hybrid inverters: Solax, Hailei, Fox ESS H3; energy meters: Siemens PAC, Carlo Gavazzi; battery storage: Fronius GEN24 Plus
+- Support single- and two-phase dynamic load management
+- Support up to 64 managed chargers
+- Rework Modbus TCP server
+- Add NFC Tag Injection to WARP register set
+- Add EVSE GPIOs to WARP register set
+- Remove external control enabled/disabled setting
+- SunSpec: Support multiple models of the same type per device
+- Speed up charge log PDF generation
+- Allow more active chargers in parallel if dynamic load management is disabled
+- Detect and reject multiple charge managers managing the same charger
+- Don't attempt to connect to servers if no network connection is available
+- Fix charge_manager/available_current API and automation action
+- Improve time keeping between RTCs, NTP and other time sources
+- Fix descriptions of energy Q4 meter values
+- OCPP: Fix truncated charge point model
+- OCPP: Improve compatibility with SteVe
+- OCPP: Fix reconnect handling
+- Fix Shelly Pro (3)EM monophase mode
+- Allow charge tracker to fall back to resettable energy values if non-resettable are not available (f.e. Shelly Pro (3)EM)
+- Charge Manager: Fix fast ramp-up
+- Charge Manager: Fix phase switch with vehicles reacting slowly
+- Charge Manager: Don't let wake-up switch phases if hysteresis is not elapsed yet
+- MQTT: Fix leaking all DRAM with misbehaving brokers resulting in WiFi disconnects
+- Fix log spam of Modbus timeouts
+- Fix multiple remote access bugs
+- Increase CP disconnect time to minimum 5 seconds (through EVSE 2.0 Bricklet firmware 2.2.7)
+- Wait up to 10 seconds for a vehicle to react after a phase switch (through EVSE 2.0 Bricklet firmware 2.2.7)
+- Allow instant phase switch if contactor was not yet closed once or CP was disconnected (through EVSE 2.0 Bricklet firmware 2.2.7)
+- Fix glitch after 30 second CP disconnect (through EVSE 2.0 Bricklet firmware 2.2.7)
+
+2024-12-02: 2.6.3 (a13b80a0)
+- Fix charger manager never allocating current if any charger is not immediately reachable
+
+2024-12-03: 2.6.4 (e2a6bba1)
+- Fix missing web interface alert texts
+
+2024-12-05: 2.6.5 (cd50d3be)
+- Fix external current slot blocking after firmware update
+- Fix managed chargers not being found via mDNS resolve anymore
+- Fix zero line being drawn on axis labels
+
+2024-12-12: 2.6.6 (c4005e8a)
+- Support up to 5 remote access users
+- Add "PV excess" and "dynamic load management" presets to API meter
+- Fix charge manager disabling unrelated chargers to activate waiting chargers
+- Improve translations
+
+2025-02-06: 2.7.0 (99ab2456)
+- Add day ahead price
+- Add solar forecast
+- Add eco mode / charge plans
+- Add MQTT read only mode
+- Remote Access: Add registration via authorization token
+- Charge Manager: Rotate chargers in sync
+- Charge Manager: Prioritize chargers by average allocated power
+- Charge Manager: Fix manager reporting a charger error after reboot
+- Use browser's preferred language for login page translation
+- Fix WiFi scan results with unexpected characters
+- Remote Access: Support notes with multiple lines of text
+- SunSpec: Auto-detect Fronius GEN24 Plus battery model
+- Modbus TCP: Add Shelly Pro (3)EM frequency values
+- Modbus TCP: Fix Deye load energy current and power sign
+- SunSpec: Fix SolarEdge inverter power sign
+- SunSpec: Add quirk for KOSTAL endian-swapped floats
+- SunSpec: Add work-around for SolarEdge meter model mixup
+- Fix Caps Lock detection of password inputs
+- Report single phase connected if meter only detects voltage on L1 (through EVSE 2.0 Bricklet firmware 2.2.9)
+- Fix multiple remote access bugs
+- Improve translations
+
+2025-02-06: 2.7.1 (0f022cdc)
+- Fix connected phase detection after power cycle (through EVSE 2.0 Bricklet firmware 2.2.10)
+
+2025-02-11: 2.7.2 (dc1c06ad)
+- Add meter location
+- Charge Manager: Fix Min+PV charge mode
+- Charge Manager: Fix Min charge mode
+- Fix multiple remote access bugs
+- Update timezone database
+- Improve translations
+
+2025-02-20: 2.7.3 (99d728f5)
+- Support to start/stop charges as a specific user with the status page start/stop buttons
+- SunSpec: Add support for MPPT extension model 160 and DER DC measurement model 714
+- SunSpec: Add abort button for device scan
+- SunSpec: Fix sign of power and power factor values in DER AC measurement model 701
+- SunSpec: Workaround wrong meter values from SolarEdge inverters in DER AC measurement model 701
+- Modbus TCP: Workaround broken error responses from Sungrow inverters
+- Modbus TCP: Fix output type detection for Sungrow string inverters
+- Add device info to web interface menu bottom
+- Disconnect least recently active web interface if all connections are in use and a new web interface connects
+- Don't allow setting the web interface listen port to an "unsafe" port
+- Close WS and OCPP network connections before reboot
+
+2025-02-25: 2.7.4 (d34a5007)
+- SunSpec: Remove quirk for KOSTAL endian-swapped floats, it creates more problems than it fixes
+- Charge Tracker: Fix language selection for PDF export
+- Charge Tracker: Fix encoding of non-CP-1252 characters for PDF export
+
+2025-02-26: 2.7.5 (acbfc184)
+- SunSpec: Fix partial reading of model data
+- Charge Limits: Support custom energy limit
+- Improve translations
+
+2025-03-06: 2.7.6 (f5a21336)
+- Fix switch to three-phase charging requiring too much PV current
+- Modbus TCP: Add support for SolarEdge battery storage
+- SunSpec: Add support for battery storage model 802
+- MQTT auto discovery: Add allowed charging current
+- MQTT auto discovery: Change globalcurrent unit from mA to A
+- MQTT auto discovery: Round power and energy values
+- Fix MQTT over WS(S)
+- Fix colors of disabled inputs in web interface
+
+2025-04-02: 2.7.7 (04ac71ae)
+- Charge Manager: Make sure chargers in one of the "Min" modes are always activated if possible
+- Charge Manager: Don't stop all chargers if some are not reachable
+- Remote Access: Changed format of authorization token to be more fault tolerant
+- SunSpec: Add autodetection for quirk for KOSTAL endian-swapped floats
+- SunSpec: Improve device search for SMA devices
+- Modbus TCP: Add support for Eastron SDM630 TCP meter
+- Modbus TCP: Add support for WARP Charger as meter
+- Modbus TCP: Fix sign of grid power for Sungrow string inverter
+- Modbus TCP: Siemens PAC meters measure phase currents non-directional
+- Add configurable delay to automation rules
+- Add support for more SMA Speedwire devices (e.g. SMA Energy Meter)
+- Speed up debug report (trace log) download
+- Improve robustness of charge log recording
+- Improve remote access stability
+- Update timezone database
+- Improve translations
+
+2025-04-04: 2.7.8 (61deb81d)
+- Remote Access: Fix crash when downloading debug report (trace log)
+- OCPP: Fix disconnect due to wrong pong timeout for non-standard ping timeout
+
+2025-04-29: 2.8.0 (e30e579b)
+- Automatically detect unstable firmware updates and rollback to previous firmware
+- Improve PV excess charging and dynamic load management for single phase vehicles even without Energy Manager or phase switching (through EVSE 2.0 Bricklet firmware 2.2.11)
+- Modbus TCP: Add support for SAX Power Home
+- Modbus TCP: Add support for E3/DC Hauskraftwerk
+- Modbus TCP: Add support for Huawei SUN2000
+- Modbus TCP: Add support for 2nd GoodWe battery
+- Modbus TCP: Fix GoodWe battery power > 32kW
+- SunSpec: Show warning in web interface in case of errors during the device scan
+- SunSpec: Fix support for devices with base address 50000 and 0
+- Solar Forecast: Fix DST handling
+- Don't allow to assign an NFC tag to multiple users
+- Dynamic Load Management: Reduce lower bound for maximum grid current from 25A to 20A
+- Add remote access section to status page
+- Add more help texts to web interface
+- Update core software libraries (ESP-IDF 5.4 and arduino-esp32 3.2)
+
+2025-05-15: 2.8.1 (90e590cd)
+- Charge Tracker: Fix summary in PDF export
+- Charge Manager: Fix incorrect phase switching in Min+PV mode
+- Modbus TCP: Fix inverter power and battery current sign for Alpha ESS and Hailei hybrid inverters
+- Modbus TCP: Add reduced register set for Huawei SUN2000 with Smart Dongle
+- Modbus TCP: Add PV virtual meter for Alpha ESS and Hailei hybrid inverters
+- Modbus TCP and SunSpec: Device address range limitation of 1 to 247 removed
+- Dynamic Load Management: Reduce lower bound for maximum grid current from 20A to 16A
+- Modbus TCP Server: Allow to choose if writes in read-only mode are silently ignored or produce and error response
+- Fix login dialog for Firefox and Chrome on iOS
+- Show warning for unexpected reboots
+- Improve translations
+
+2025-05-19: 2.8.2 (a1c1a380)
+- Charge Manager: Fix phase switching in PV mode
+
+2025-06-02: 2.8.3 (201b466a)
+- SunSpec: Adapt to changes since KOSTAL Smart Energy Meter firmware 2.6.0
+- SunSpec: Fix power factor for SMA inverters
+- SunSpec: Fix energy export/import mix up for model 714
+- Modbus TCP: Fix crash with empty custom register table
+- Modbus TCP: Fix Fox ESS grid export scale factor
+- Modbus TCP: Add support for Huawei EMMA
+- Improve SMA Speedwire robustness
+- Add optional SMA Speedwire serial number filter
+- Charge Manager: Allow maximum current limit automation also while PV excess charging and dynamic load management are disabled
+- Charge Manager: Fix watchdog not resetting the available current correctly
+- Charge Tracker: Save PDF letterhead
+- Speed up establishing WiFi connection
+- Speed up WiFi network scan
+- Speed up Ethernet initialization
+- Improve meter availability check robustness
+- Extend network address misconfiguration detection
+- Improve translations
+
+2025-07-07: 2.8.4 (c8441c45)
+- Add front button state registers to WARP Modbus/TCP register table
+- Modbus TCP: Add support for Carlo Gavazzi EM580 meter
+- Modbus TCP: Add support for Fox ESS H3 Smart and Pro inverter
+- Modbus TCP: Add support for Fox ESS load and PV virtual meters
+- Modbus TCP: Add support for GoodWe inverter PV virtual meter
+- Modbus TCP: Add support for Solax string inverter
+- Modbus TCP: Add support for Solax inverter PV virtual meter
+- Modbus TCP: Add support for Sungrow inverter PV virtual meter
+- Modbus TCP: Fix default meter location for Carlo Gavazzi EM270 and EM280 meter
+- Modbus TCP: Fix Fox ESS inverter grid energy export value
+- Modbus TCP: Fix GoodWe inverter power values, power factors and load energy
+- Modbus TCP: Fix GoodWe inverter battery handling
+- Modbus TCP: Fix Alpha ESS / Hailei inverter PV energy mapping
+- Modbus TCP: Convert Victron Energy GX inverter virtual meter to PV virtual meter
+- Improve SMA Speedwire robustness
+- Improve WireGuard and remote access robustness
+- Fix charge limit defaults not being restored correctly
+- Fix OCPP sampled meter value default configuration
+- Charge Tracker: Allow clearing PDF letterhead
+- Fix mDNS spam
+- Fix interrupted charging with BMW PHEVs (through EVSE 2.0 Bricklet firmware 2.2.12)
+- Fix phase switching too fast if vehicle's charge controller hangs; fixes problems with Polestar EVs (through EVSE 2.0 Bricklet firmware 2.2.12)
+- Fix contactor check false positive directly after power cycle (through EVSE 2.0 Bricklet firmware 2.2.12)
+- Add third and fourth EV wakeup attempt via IEC state F (through EVSE 2.0 Bricklet firmware 2.2.12)
+- Improve translations
+
+2025-07-08: 2.8.5 (b4d1c6c6)
+- Use meter to check supply voltages
+- Prevent WireGuard keys from being leaked via debug report
+- Increase IP input strictness to prevent typos
+- Modbus TCP: Fix PV power for Deye low-voltage hybrid inverters
+- Improve translations
+
+2025-07-10: 2.8.6 (97fa5185)
+- SunSpec: Fix wrong energy values for TQ-Systems EM420
+- Modbus TCP: Fix reading wrong registers for Solaredge, Eastron SDM630 TCP, WARP Charger, SAX Power Home, E3DC and Huawei meters
+
+2025-08-04: 2.8.7 (5049fb30)
+- Modbus TCP: Add support for SMA hybrid inverter battery virtual meter
+- RCT Power: Add support for inverter, load and PV virtual meters
+- RCT Power: Add support for phase power value to virtual grid meter
+- SunSpec: Improve robustness of device scan on connect
+- Charge Manager: Add battery storage SoC threshold for PV excess charging
+- Charge Manager: Improve (m)DNS hostname lookup robustness
+- Solar forecast: Stricter plane configuration checks
+- OCPP: Adapt to errata version 2025-04
+- Hide eco plan if eco mode or charge manager is disabled
+- MQTT auto discovery: Add phase currents
+- Improve EV wakeup attempt via IEC state F (through EVSE 2.0 Bricklet firmware 2.2.14)
+- Increase EV wakeup delay from 30s to 90s; some VW EVs will wakeup by themself, but need longer then 30s (through EVSE 2.0 Bricklet firmware 2.2.14)
+- Improve translations
+
+2025-08-06: 2.8.8 (e537a982)
+- SunSpec: Fix power and phase-to-phase voltage values for WattNode meters
+- Remote Access: Fix adding new user
+- Fix crash in the common config logic
+
+2025-09-04: 2.8.9 (2397fc2e)
+- Support reading (HTTP-only) and writing (HTTP and MQTT) sub-APIs via URL/topic suffix
+- Add support for more Modbus TCP devices: VARTA Element/Flex battery, Chisage ESS hybrid inverter
+- SunSpec: Fix phase-to-phase voltage values for WattNode meters again
+- Fix firmware update progress bar
+- Fix controlled chargers erroneously being shown as unavailable after 49 days
+- Fix front button LED control via API not always being applied if last LED update was also set via API
+- Fix CP disconnect resulting in vehicle being reported as disconnected (through EVSE 2.0 Bricklet firmware 2.2.15)
+- Remove unnecessary long wait time after CP reconnect (through EVSE 2.0 Bricklet firmware 2.2.15)
+- Support Eltako DSZ16DZE (through EVSE 2.0 Bricklet firmware 2.2.15)
+
+2025-09-09: 2.8.10 (bf2cbf40)
+- Fix another issue where a CP disconnect results in the vehicle being reported as disconnected (through EVSE 2.0 Bricklet firmware 2.2.16)
+
+2025-11-03: 2.8.11 (dcf64e9e)
+- Support sending monthly charge log emails via remote access
+- Add phase switching support to OCPP
+- Rework charge manager status section
+- Add charge manager decision information
+- Support overriding charge mode for a single charger and charge
+- Make charge mode optionally persistent
+- Make Eco charge plan persistent
+- Support enlarging Eco charge plan plots on click
+- Add key generation to WireGuard subpage
+- Add supply voltage check
+- Modbus TCP: Fix Sungrow battery power and energy values
+- Modbus TCP: Fix Goodwe inverter and grid energy values
+- Modbus TCP: Fix Fox ESS H3 battery values; support second battery
+- Fix charge manager allocating too much if vehicle draws no current
+- Fix charge manager stopping chargers on reboot
+- Modbus TCP Server: Always allow reading known registers even if feature is not available
+- Make sure Eco module only changes decision between 15 minute slots
+- Fix day ahead prices, firmware update, solar forecast and remote access not working if network latency is more than 50 ms
+- Fix WiFi AP's automatic channel selection interfering with first STA connection attempt
+- Fix injected NFC tags not showing up in web interface
+- Improve "day ahead prices not available" error message
+- Fix charger state change automation triggering after reboot
+- Make sure broken web server results in firmware rollback
+- Default phase switch wait time increased for compatibility with slow switching vehicles (through EVSE 2.0 Bricklet firmware 2.2.17)
+- Add configurable phase switch wait time (through EVSE 2.0 Bricklet firmware 2.2.17)
+- Support Iskra WM3M4C (through EVSE 2.0 Bricklet firmware 2.2.17)
+- Fix spuriously reported error state 5 (through EVSE 2.0 Bricklet firmware 2.2.17)
+- Improve phase switch robustness (through EVSE 2.0 Bricklet firmware 2.2.17)
+
+2025-11-04: 2.8.12 (f137cf63)
+- Fix language specific decimal separator in CSV charge log
+- Fix publishing deprecated object_id on Home Assistant MQTT discovery topics
+- Increase default phase switch wait time to 60 seconds (through EVSE 2.0 Bricklet firmware 2.2.18)
+
+2025-11-06: 2.8.13 (1a602778)
+- Fix wrong charge manager allocations when phase rotation is not configured
+- Work around Safari bug breaking firmware updates via remote access
+
+2025-12-18: 2.8.14 (e14922b8)
+- Add support for more Modbus TCP devices: Janitza UMG series meters, Huawei Smart Logger 3000
+- Add reading of battery capacity values to Alpha ESS, Hailei and Sungrow inverters
+- Fix Fronius GEN24 Plus MPPT power sum via SunSpec
+- Make WireGuard and remote access MTU configurable
+- Don't require to login twice via remote access
+- Fix remote access not re-resolving server hostname
+- Fix large requests via remote access sometimes not working
+- Improve charge manager compatibility with vehicles that will start or stop charging depending on the available current
+- Automatically unblock charging when all related automation rules are removed
+- Fix charge mode buttons not showing up on managed charger that was a charge manager for only itself in the past
+- Fix "request charge mode" automation actions not being saved correctly
+- Display MACs and BSSIDs on ethernet and WiFi subpages
+- Fix Modbus TCP client not reconnecting pooled connections
+- Improve hostname/IP address validation
+- Improve web interface responsiveness with many configured chargers/meters
+- Update timezone database
+- Make sure CP can not stay disconnected when charging current is changed during disconnect (through EVSE 2.0 Bricklet firmware 2.2.19)
+
+2025-12-18: 2.8.15 (ef05176e)
+- Fix crash in charge manager initialization
+
+2025-12-22: 2.8.16 (c1f09919)
+- Fix crash while closing or reloading the web interface using the remote access
+
+2026-01-22: 2.8.17 (78c7dbd6)
+- Stop all chargers if PV excess charging or dynamic load management don't receive necessary meter values anymore
+- Always prefer ethernet connection over WiFi connection
+- Show warning if web interface and browser UI locale differ
+- Add optional scrollbar to wide tables
+- Add support for RCT Power grid phase voltage and frequency values
+- Invert power values of Fronius energy meters measuring loads
+- Fix grid energy values for some Goodwe inverters
+- Fix losing SMA Speedwire packets after a few minutes
+- Fix remote access blocking forever under unknown circumstances
+- Fix remote access attempting to connect twice in parallel
+- Fix error messages being lost when updating firmware via remote access
+- Fix remote access not being deactivated when device is deleted server-side while offline
+- Improve web server and web sockets robustness against dropped connections
+
+2026-02-04: 2.9.0 (a37f9364)
+- Add battery control
+- Add Modbus TCP battery control support: Victron Energy GX; Deye, Alpha ESS, Hailei, Sungrow and SMA hybrid inverters
+- Add translated SunSpec scan report
+- Add language selection to charge log download
+- Fix charge logs not showing the unknown user's default name correctly
+- Fix encoding of non-CP-1252 characters in CSV charge logs
+- Fix Carlo Gavazzi EM270 and EM280 virtual meter config
+- Improve translations
+
+2026-04-22: 2.10.0 (27eee312)
+- Add EEBUS support
+- Add configuration changes without reboot for most modules
+- Add HTTPS support to web interface and HTTP API
+- Centralize §14a support in separate sub-page
+- Add TLS 1.3 support
+- Add status information to many sub-pages
+- Add status widget to web interface
+- Add dark mode to web interface
+- Add Modbus TCP meter support: Solis hybrid inverter, Growatt  TL-X(H) hybrid inverter, Eltako DSZ16D, DSZ16DE, DSZ16DZ and DSZ16DZE energy meters
+- Add Modbus TCP battery control support: Solis hybrid inverter, Growatt TL-X(H) hybrid inverter, SAX Power Home (does not support force charge/discharge)
+- Modbus TCP: Calculate SolarEdge PV power in case SunSpec MPPT model is missing
+- Modbus TCP: Add battery virtual meter for Fronius Verto Plus
+- Document missing Modbus TCP battery control support for SMA inverter series: Sunny Boy Smart Energy, Sunny Tripower Storage and Sunny Island
+- Add binary NFC tag ID registers to WARP Modbus TCP register table
+- Fix crashes caused by WireGuard (re)connects
+- Fix charge log PDF generation skipping entries when using date filter
+- Charge Manager: Improve handling of vehicles that take some time to (re)start charging
+- Fix OCPP overriding other phase switch decisions
+- Battery control: Fix wrong rules being shown as active
+- Battery control: Fix rule with fast charge condition not being activated at start-up
+- Battery control: Set mode "normal" if there are no rules configured
+- Battery control: Fix time condition issues
+- Battery control: Fix SMA block/normal mode
+- Day ahead prices: Migrate to 15 minute resolution for DE/AT/LU regions
+- Day ahead prices: Add API to push custom prices
+- Day ahead prices: Fix off-by-one error in expensive slot calculation
+- Day ahead prices: Add calendar prices (for §14a EnWG Modul 3 and similar)
+- Fix logged automation rule index
+- Modbus TCP: Fix temperature value of second SolarEdge battery
+- Modbus TCP: Fix grid import energy value for GoodWe inverters
+- Modbus TCP: Fix sign of power value for GoodWe inverters' "meter" virtual meter
+- Modbus TCP: Fix detection of second battery for GoodWe inverters
+- SunSpec: Fix Fronius Verto Plus MPPT power sum
+- SunSpec: Fix inverter AC/DC power sign mismatch
+- SunSpec: Fix version detection of KOSTAL Smart Energy Meters with firmware 2.6.0
+- SunSpec: Improve scan robustness
+- Warn more when disabling network interfaces to prevent lock-out
+- Fix Iskra WM3M4C's non-resettable energy values being marked as resettable
+- Improve WebSocket robustness
+- Disallow selecting meters with wrong location for PV excess charging / dynamic load management
+- Improve remote access robustness
+- Center header logo on small screens
+- Update timezone database
+- Unify device scan dialogs
+- Add measurement of grid frequency via PE detection when using a DSZ15DZMOD energy meter (through EVSE 2.0 Bricklet firmware 2.2.20)
+- Don't spuriously report contactor error when closing (through EVSE 2.0 Bricklet firmware 2.2.20)
+- Use charge mode color for charging animation (through EVSE 2.0 Bricklet firmware 2.2.21)
+
+2026-04-23: 2.10.1 (9c0329bc)
+- Fix OCPP authorization

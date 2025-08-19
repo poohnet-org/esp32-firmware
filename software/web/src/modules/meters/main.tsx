@@ -1044,6 +1044,10 @@ export class Meters extends ConfigComponent<null, MetersProps, MetersState> {
                                                     value={this.state.edit_meter_config[0].toString()}
                                                     className={
                                                         // the charger internal meter has to be in the slot the EVSE expects it to be in
+//#if OPTIONS_PRODUCT_ID_IS_WARP_ON_STEROIDS
+                                                        this.state.edit_meter_slot != this.state.charger_meter_slot
+                                                     && this.state.edit_meter_config[0] == MeterClassID.RS485Bricklet ? "is-invalid" : undefined
+//#else
 //#if OPTIONS_PRODUCT_ID_IS_WARP
                                                         this.state.edit_meter_slot != this.state.charger_meter_slot
                                                      && this.state.edit_meter_config[0] == MeterClassID.RS485Bricklet ? "is-invalid" : undefined
@@ -1053,6 +1057,7 @@ export class Meters extends ConfigComponent<null, MetersProps, MetersState> {
                                                      && this.state.edit_meter_config[0] == MeterClassID.EVSEV2 ? "is-invalid" : undefined
 //#else
                                                         undefined
+//#endif
 //#endif
 //#endif
                                                     }
@@ -1151,6 +1156,10 @@ export class Meters extends ConfigComponent<null, MetersProps, MetersState> {
                                             required
                                             className={
                                                 // the charger internal meter has to be in the slot the EVSE expects it to be in
+//#if OPTIONS_PRODUCT_ID_IS_WARP_ON_STEROIDS
+                                                   this.state.add_meter_slot != this.state.charger_meter_slot
+                                                && this.state.add_meter_config[0] == MeterClassID.RS485Bricklet ? "is-invalid" : undefined
+//#else
 //#if OPTIONS_PRODUCT_ID_IS_WARP
                                                    this.state.add_meter_slot != this.state.charger_meter_slot
                                                 && this.state.add_meter_config[0] == MeterClassID.RS485Bricklet ? "is-invalid" : undefined
@@ -1160,6 +1169,7 @@ export class Meters extends ConfigComponent<null, MetersProps, MetersState> {
                                                 && this.state.add_meter_config[0] == MeterClassID.EVSEV2 ? "is-invalid" : undefined
 //#else
                                                 undefined
+//#endif
 //#endif
 //#endif
                                             }
