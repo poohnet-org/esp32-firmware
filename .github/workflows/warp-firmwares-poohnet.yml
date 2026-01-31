@@ -1,13 +1,13 @@
 name: WARP Firmwares poohnet
 on:
-  push
+  workflow_dispatch
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         environment: [warp_poohnet, warp2_poohnet]
-        os: [ubuntu-latest]
+        os: [poohnet-arc-runner-set]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache/restore@v4
