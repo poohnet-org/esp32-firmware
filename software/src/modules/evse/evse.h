@@ -95,6 +95,7 @@ protected:
     bool is_external_control_allowed() override;
 
     ConfigRoot user_calibration;
+    ConfigRoot phases_connected;
 
 public:
     void register_cp_backend(ControlPilotBackend* backend);

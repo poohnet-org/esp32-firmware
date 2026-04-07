@@ -115,6 +115,10 @@ void EVSE::pre_setup()
         {"resistance_2700", Config::Int16(0)},
         {"resistance_880", Config::Tuple(14, Config::Int16(0))}
     });
+
+    phases_connected = Config::Object({
+        {"phases", Config::Uint8(3)}
+    });
 }
 
 void EVSE::post_register_urls()
@@ -134,6 +138,8 @@ void EVSE::post_register_urls()
             resistance_880
             ));
     }, true);
+
+    api.addState("evse/phases_connected", &phases_connected);
 }
 
 void EVSE::factory_reset()
