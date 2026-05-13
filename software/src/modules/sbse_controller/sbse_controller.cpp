@@ -133,6 +133,10 @@ SbseController::SbseController() :
 
 void SbseController::pre_setup()
 {
+    // Persistent boot defaults. Written to NVS on every PUT to
+    // sbse_controller/config; intended for occasional policy changes,
+    // not for steering the system in real time. See active_config below
+    // for the flash-free runtime channel.
     config = ConfigRoot{Config::Object({
         {"enabled",          Config::Bool(false)},
         {"host",             Config::Str("", 0, 64)},
@@ -164,6 +168,30 @@ void SbseController::pre_setup()
         return "";
     }};
 
+    // Live-tunable runtime overlay. Updated via PUT sbse_controller/active_config.
+    // NOT persisted -- changes survive only until reboot, at which point the
+    // values are re-seeded from the persistent config above. Use this channel
+    // for automation / frequent steering to avoid flash wear.
+    active_config = ConfigRoot{Config::Object({
+        {"target_grid_w",    Config::Int(0, -10000, 10000)},
+        {"max_charge_w",     Config::Uint(5000, 0, 10000)},
+        {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
+        {"kp_milli",         Config::Uint(1000, 100, 2000)},
+        {"alpha_grid_milli", Config::Uint(300, 10, 1000)},
+        {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
+        {"deadband_w",       Config::Uint(50, 0, 1000)},
+        {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
+    }), [](Config &cfg, ConfigSource /*source*/) -> String {
+        const int32_t target = cfg.get("target_grid_w")->asInt();
+        const int32_t max_c  = static_cast<int32_t>(cfg.get("max_charge_w")->asUint());
+        const int32_t max_d  = static_cast<int32_t>(cfg.get("max_discharge_w")->asUint());
+
+        if (target < -max_d || target > max_c) {
+            return "target_grid_w must be within [-max_discharge_w, +max_charge_w]";
+        }
+        return "";
+    }};
+
     state = Config::Object({
         {"mode",              Config::Str(mode_name(Mode::Disabled), 0, 16)},
         {"last_setpoint_w",   Config::Int32(0)},
@@ -182,33 +210,77 @@ void SbseController::pre_setup()
 void SbseController::setup()
 {
     api.restorePersistentConfig("sbse_controller/config", &config);
-    load_runtime_from_config();
+
+    load_init_only_from_config();
+    copy_live_tunable_to_active();
+    apply_runtime_from_active();
 
     initialized = true;
 }
 
-void SbseController::load_runtime_from_config()
+void SbseController::load_init_only_from_config()
 {
     enabled         = config.get("enabled")->asBool();
     tick_ms         = millis_t{static_cast<int64_t>(config.get("tick_ms")->asUint())};
     soc_interval_ms = millis_t{static_cast<int64_t>(config.get("soc_interval_ms")->asUint())};
-    target_grid_w   = config.get("target_grid_w")->asInt();
-    max_charge_w    = static_cast<int32_t>(config.get("max_charge_w")->asUint());
-    max_discharge_w = static_cast<int32_t>(config.get("max_discharge_w")->asUint());
-    kp              = static_cast<float>(config.get("kp_milli")->asUint())             / 1000.0f;
-    alpha_grid      = static_cast<float>(config.get("alpha_grid_milli")->asUint())     / 1000.0f;
-    alpha_setpoint  = static_cast<float>(config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
-    deadband_w      = static_cast<int32_t>(config.get("deadband_w")->asUint());
-    safety_zero_after_failures = config.get("safety_zero_after_failures")->asUint();
 
     host = config.get("host")->asString();
     port = static_cast<uint16_t>(config.get("port")->asUint());
 }
 
+void SbseController::copy_live_tunable_to_active()
+{
+    // Mirror the live-tunable subset of the persistent config into the
+    // runtime overlay. Called at boot and after a persistent PUT so that
+    // both endpoints stay coherent.
+    active_config.get("target_grid_w")          ->updateInt (config.get("target_grid_w")        ->asInt());
+    active_config.get("max_charge_w")           ->updateUint(config.get("max_charge_w")         ->asUint());
+    active_config.get("max_discharge_w")        ->updateUint(config.get("max_discharge_w")      ->asUint());
+    active_config.get("kp_milli")               ->updateUint(config.get("kp_milli")             ->asUint());
+    active_config.get("alpha_grid_milli")       ->updateUint(config.get("alpha_grid_milli")     ->asUint());
+    active_config.get("alpha_setpoint_milli")   ->updateUint(config.get("alpha_setpoint_milli") ->asUint());
+    active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
+    active_config.get("safety_zero_after_failures")->updateUint(config.get("safety_zero_after_failures")->asUint());
+}
+
+void SbseController::apply_runtime_from_active()
+{
+    // Refresh the cached fields the hot path reads.
+    target_grid_w   = active_config.get("target_grid_w")->asInt();
+    max_charge_w    = static_cast<int32_t>(active_config.get("max_charge_w")->asUint());
+    max_discharge_w = static_cast<int32_t>(active_config.get("max_discharge_w")->asUint());
+    kp              = static_cast<float>(active_config.get("kp_milli")->asUint())             / 1000.0f;
+    alpha_grid      = static_cast<float>(active_config.get("alpha_grid_milli")->asUint())     / 1000.0f;
+    alpha_setpoint  = static_cast<float>(active_config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
+    deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
+    safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
+}
+
 void SbseController::register_urls()
 {
-    api.addPersistentConfig("sbse_controller/config", &config);
-    api.addState           ("sbse_controller/state",  &state);
+    // Persistent config (writes to NVS on every PUT). We open-code the
+    // state + "_update" command pair instead of api.addPersistentConfig
+    // so we can hook a hot-reload callback after the flash write completes.
+    api.addState("sbse_controller/config", &config);
+    api.addCommand("sbse_controller/config_update", &config, {},
+                   [this](Language /*language*/, String &/*errmsg*/) {
+        API::writeConfig("sbse_controller/config", &config);
+
+        // Hot-reload the live-tunable subset so PUTs to /config take effect
+        // immediately. Init-only fields (host, port, tick_ms, ...) still
+        // require a reboot.
+        copy_live_tunable_to_active();
+        apply_runtime_from_active();
+    }, false);
+
+    // Live-tunable runtime overlay (no flash write).
+    api.addState("sbse_controller/active_config", &active_config);
+    api.addCommand("sbse_controller/active_config_update", &active_config, {},
+                   [this](Language /*language*/, String &/*errmsg*/) {
+        apply_runtime_from_active();
+    }, false);
+
+    api.addState("sbse_controller/state", &state);
 
     api.addCommand("sbse_controller/force_release", Config::Null(), {},
                    [this](Language /*language*/, String &/*errmsg*/) {
