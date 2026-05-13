@@ -80,11 +80,16 @@ private:
     void publish_mode(Mode mode);
 
     // Reconfiguration helpers
-    void load_runtime_from_config();
+    void load_init_only_from_config();         // init-only fields (host, port, tick_ms, ...)
+    void apply_runtime_from_active();          // live-tunable cached fields <- active_config
+    void copy_live_tunable_to_active();        // active_config <- live-tunable subset of config
     void apply_enabled();
 
-    // --- config ---
+    // --- persistent boot defaults ---
     ConfigRoot config;
+
+    // --- live-tunable runtime overlay (NOT persisted; survives only in RAM) ---
+    ConfigRoot active_config;
 
     // --- runtime state ---
     ConfigRoot state;
