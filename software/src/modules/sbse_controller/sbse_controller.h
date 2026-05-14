@@ -106,6 +106,7 @@ private:
     float    alpha_setpoint     = 0.70f;
     int32_t  deadband_w         = 50;
     uint32_t safety_zero_after_failures = 5;  // 0 disables the safety net
+    bool     simulation_mode    = false;       // skips actual Modbus writes when true
 
     // --- runtime ---
     uint64_t tick_task_id       = 0;
