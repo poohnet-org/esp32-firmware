@@ -43,7 +43,6 @@ let x = {
             "section_targets":    "Control targets",
             "section_tuning":     "Controller tuning",
             "section_safety":     "Safety",
-            "section_chart":      "Live trace (last 5 minutes)",
 
             "enabled":         "Enabled",
             "enabled_desc":    "Run the setpoint controller",
