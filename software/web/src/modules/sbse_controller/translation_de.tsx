@@ -43,7 +43,6 @@ let x = {
             "section_targets":    "Sollwerte",
             "section_tuning":     "Reglerparameter",
             "section_safety":     "Sicherheit",
-            "section_chart":      "Live-Verlauf (letzte 5 Minuten)",
 
             "enabled":         "Aktiviert",
             "enabled_desc":    "Sollwertregler ausführen",
