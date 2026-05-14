@@ -23,14 +23,18 @@ let x = {
             "force_release": "30 s pausieren (0 W)",
             "resume":        "Fortsetzen",
             "sim_badge": "SIM",
+            "mb_badge":  "MB",
+            "mb_badge_help_title": "Ein externer Modbus-TCP-Client steuert den Regler aktuell",
 
-            "mode_disabled":      "deaktiviert",
-            "mode_not_connected": "nicht verbunden",
-            "mode_stale":         "veraltet",
-            "mode_running":       "läuft",
-            "mode_paused":        "pausiert",
-            "mode_safety":        "Sicherheitsmodus",
-            "mode_faulted":       "Fehler"
+            "mode_disabled":        "deaktiviert",
+            "mode_not_connected":   "nicht verbunden",
+            "mode_stale":           "veraltet",
+            "mode_running":         "läuft",
+            "mode_paused":          "pausiert",
+            "mode_safety":          "Sicherheitsmodus",
+            "mode_faulted":         "Fehler",
+            "mode_force_charge":    "Zwangsladung",
+            "mode_force_discharge": "Zwangsentladung"
         },
         "chart": {
             "grid":     "Netz (EMA)",
@@ -96,7 +100,18 @@ let x = {
             "deadband_w_help": <>Liegt der neu berechnete Sollwert innerhalb ±Totband um den zuletzt geschriebenen Wert, wird der Modbus-Schreibvorgang übersprungen. Der SBSE hält den letzten Wert; großzügige Totbänder sind unkritisch.</>,
 
             "safety_zero_after_failures":      "Sicherheits-Null nach N Lesefehlern",
-            "safety_zero_after_failures_help": <>Nach so vielen aufeinanderfolgenden Lesefehlern setzt der Regler einmalig den Sollwert auf 0 W und bleibt im Sicherheitsmodus, bis das Lesen wieder funktioniert. Auf 0 setzen, um diese Sicherung zu deaktivieren.</>
+            "safety_zero_after_failures_help": <>Nach so vielen aufeinanderfolgenden Lesefehlern setzt der Regler einmalig den Sollwert auf 0 W und bleibt im Sicherheitsmodus, bis das Lesen wieder funktioniert. Auf 0 setzen, um diese Sicherung zu deaktivieren.</>,
+
+            "section_modbus_server":           "Modbus-TCP-Server (externe Steuerung)",
+            "modbus_server_enabled":           "Modbus-TCP-Server",
+            "modbus_server_enabled_desc":      "SMA-kompatible Sollwert-Schreibvorgänge entgegennehmen",
+            "modbus_server_enabled_help":      <>Startet einen Modbus-TCP-Server, der dieselben WriteMultipleRegisters-Befehle akzeptiert, die das WARP-Charger-Modul „SMA Hybrid Inverter" an einen echten Sunny Boy Storage sendet. Block, Normal, Block Entladen, Block Laden, Zwangsladung und Zwangsentladung werden unterstützt. Jeder Schreibvorgang aktualisiert auch das laufende <code>active_config</code>, sodass das Dashboard widerspiegelt, was der externe Client tut. Bedienereingriffe über Dashboard / HTTP / MQTT übernehmen sofort („letzter Schreibvorgang gewinnt"). Eine Portänderung erfordert einen Neustart.</>,
+            "modbus_server_port":              "Port",
+            "modbus_server_port_help":         <>TCP-Port, auf dem gelauscht wird. SMA-Standard ist <code>502</code>. Eine Änderung erfordert einen Neustart.</>,
+            "modbus_server_unit_id":           "Unit-ID",
+            "modbus_server_unit_id_help":      <>Modbus-Unit-ID, auf die dieser Server antwortet. Der Standardwert <code>3</code> entspricht der SMA-Hybrid-Wechselrichter-Konvention, sodass bestehende Clients ohne Änderung funktionieren. Auf <code>0</code> setzen, um jede Unit-ID zu akzeptieren.</>,
+            "modbus_server_watchdog_s":        "Watchdog-Timeout",
+            "modbus_server_watchdog_s_help":   <>Trifft innerhalb dieser Anzahl Sekunden kein Modbus-Schreibvorgang ein, setzt der Regler die Live-Überschreibungen (<code>target_grid_w</code>, <code>max_charge_w</code>, <code>max_discharge_w</code>) auf die persistenten Konfigurationswerte zurück und verlässt den Force-Modus. Der echte SMA-Wechselrichter-Watchdog läuft nach 5 Minuten ab; der Standard von 60 s entspricht dem Sendeintervall des WARP-Chargers. Deaktivieren, um den letzten Sollwert dauerhaft zu halten.</>
         },
         "script": {
             "save_failed":          "Speichern der SBSE-Regler-Einstellungen fehlgeschlagen",

@@ -23,14 +23,18 @@ let x = {
             "force_release": "Pause 30 s (0 W)",
             "resume":        "Resume",
             "sim_badge": "SIM",
+            "mb_badge":  "MB",
+            "mb_badge_help_title": "An external Modbus TCP client is currently steering the controller",
 
-            "mode_disabled":      "disabled",
-            "mode_not_connected": "not connected",
-            "mode_stale":         "stale",
-            "mode_running":       "running",
-            "mode_paused":        "paused",
-            "mode_safety":        "safety",
-            "mode_faulted":       "faulted"
+            "mode_disabled":        "disabled",
+            "mode_not_connected":   "not connected",
+            "mode_stale":           "stale",
+            "mode_running":         "running",
+            "mode_paused":          "paused",
+            "mode_safety":          "safety",
+            "mode_faulted":         "faulted",
+            "mode_force_charge":    "force charge",
+            "mode_force_discharge": "force discharge"
         },
         "chart": {
             "grid":     "Grid (EMA)",
@@ -96,7 +100,18 @@ let x = {
             "deadband_w_help": <>If the new computed setpoint is within ±deadband of the last commanded value, the Modbus write is skipped. The SBSE keeps holding the last value, so generous deadbands are safe.</>,
 
             "safety_zero_after_failures":      "Safety-zero after N failed reads",
-            "safety_zero_after_failures_help": <>After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters the safety mode until reads recover. Disable to leave the last setpoint in place forever during outages.</>
+            "safety_zero_after_failures_help": <>After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters the safety mode until reads recover. Disable to leave the last setpoint in place forever during outages.</>,
+
+            "section_modbus_server":           "Modbus TCP server (external control)",
+            "modbus_server_enabled":           "Modbus TCP server",
+            "modbus_server_enabled_desc":      "Accept external SMA-compatible setpoint writes",
+            "modbus_server_enabled_help":      <>Starts a Modbus TCP server that accepts the same WriteMultipleRegisters commands that the WARP charger's "SMA Hybrid Inverter" battery class sends to a real Sunny Boy Storage. Block, Normal, Block Discharge, Block Charge, Force Charge and Force Discharge are all supported. Each write also updates the live <code>active_config</code>, so the dashboard reflects what the external client is doing. Operator changes via the dashboard / HTTP / MQTT take over instantly ("last write wins"). Requires a reboot if the port changes.</>,
+            "modbus_server_port":              "Port",
+            "modbus_server_port_help":         <>TCP port to listen on. SMA's default is <code>502</code>. A change requires a reboot to take effect.</>,
+            "modbus_server_unit_id":           "Unit ID",
+            "modbus_server_unit_id_help":      <>Modbus unit id this server responds to. Default <code>3</code> matches the SMA Hybrid Inverter convention so existing clients work unchanged. Set to <code>0</code> to accept any unit id.</>,
+            "modbus_server_watchdog_s":        "Watchdog timeout",
+            "modbus_server_watchdog_s_help":   <>If no Modbus write arrives within this many seconds, the controller reverts the live overrides (<code>target_grid_w</code>, <code>max_charge_w</code>, <code>max_discharge_w</code>) to the persistent config values and exits force-mode. SMA's real-inverter watchdog is 5 minutes; the default of 60 s matches the resend interval that the WARP charger uses. Disable to leave the most recent setpoint in place forever.</>
         },
         "script": {
             "save_failed":          "Failed to save the SBSE controller settings",

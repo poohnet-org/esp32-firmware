@@ -23,6 +23,10 @@ GET → modify → PUT.
 | `port` | `502` | uint16 | Modbus TCP port on the SBSE. Standard is 502. |
 | `tick_ms` | `300` | ms, 50…5000 | Control loop period. One read-compute-write cycle per tick. Lower = faster grid tracking but more Modbus traffic. |
 | `soc_interval_ms` | `1000` | ms, ≥ `tick_ms`, ≤ 60000 | How often to poll battery SoC. SoC changes slowly; polling every tick wastes bandwidth. |
+| `modbus_server_enabled` | `false` | bool | Enable the SMA-compatible Modbus TCP server (see [Modbus TCP server](#modbus-tcp-server-external-control) below). Requires a reboot to take effect. |
+| `modbus_server_port` | `502` | uint16 | Port the SMA-compatible server listens on. Requires a reboot to take effect. |
+| `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `0` means "accept any". Live-tunable (no reboot needed). |
+| `modbus_server_watchdog_s` | `60` | seconds, 0…3600 | Watchdog timeout. If no Modbus write arrives within this many seconds, the controller reverts the live overrides to the persistent config and exits force-mode. `0` disables the watchdog. Live-tunable. |
 
 ## Live-tunable fields (in both `config` and `active_config`)
 
@@ -43,7 +47,7 @@ GET → modify → PUT.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `mode` | string | `disabled` / `not_connected` / `stale` / `running` / `paused` / `safety` / `faulted`. |
+| `mode` | string | `disabled` / `not_connected` / `stale` / `running` / `paused` / `safety` / `faulted` / `force_charge` / `force_discharge`. |
 | `last_setpoint_w` | int32 | Last value successfully written to the inverter. |
 | `last_write_age_ms` | uint32 | Milliseconds since the last successful write. Grows when the deadband suppresses writes. |
 | `grid_w_raw` | int32 | Most recently read grid power, unsmoothed. |
@@ -54,6 +58,9 @@ GET → modify → PUT.
 | `write_err_count` | uint32 | Lifetime counter of failed setpoint writes. |
 | `read_fail_streak` | uint32 | Current run of consecutive failed read cycles; resets on the next successful cycle. |
 | `simulation_mode` | bool | Mirrors `active_config.simulation_mode`. When `true`, the controller is computing setpoints but **not writing them to the inverter**. |
+| `modbus_active` | bool | `true` if a Modbus TCP server write has been applied within the watchdog window. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
+| `modbus_op_mod` | uint16 | Last `OpMod` value received from the Modbus server (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). |
+| `modbus_force_w` | int32 | Battery power currently being commanded under force-mode (`0` when the P controller is running). Negative = charging, positive = discharging. |
 | `last_error` | string | Last error message produced by a read or write. |
 
 ## Commands
@@ -63,6 +70,71 @@ GET → modify → PUT.
 | `sbse_controller/config_update` | full `config` object | Validates, writes NVS, hot-reloads live-tunable subset. Equivalent to `PUT /sbse_controller/config`. |
 | `sbse_controller/active_config_update` | full `active_config` object | Validates, updates runtime fields. No flash write. Equivalent to `PUT /sbse_controller/active_config`. |
 | `sbse_controller/force_release` | empty | Writes one 0 W setpoint and pauses the loop for 30 s. `mode → paused`. |
+
+## Modbus TCP server (external control)
+
+When `config.modbus_server_enabled = true`, the controller listens on `config.modbus_server_port` (default `502`) and accepts the **same WriteMultipleRegisters traffic that the WARP charger's "SMA Hybrid Inverter" battery class sends to a real Sunny Boy Storage**. The controller is the server; an external WARP / energy manager / scripting client is the client.
+
+### Accepted registers
+
+Only `WriteMultipleRegisters` (function code `16`) at exactly these two addresses is accepted. Everything else returns `IllegalFunction` or `IllegalDataAddress`. The unit ID must match `modbus_server_unit_id` (or it is `0`, meaning "accept any").
+
+| Address | Length | Type | Field | Notes |
+|---|---|---|---|---|
+| `40236` | 2 | U32BE | `CmpBMS.OpMod` | `2424` = Default, `2289` = Battery charging, `2290` = Battery discharging. Any other value is treated as `2424`. |
+| `40793` | 10 | 5 × U32BE | `CmpBMS.{BatChaMinW, BatChaMaxW, BatDchgMinW, BatDchgMaxW, GridWSpt}` | All in W. Min values are accepted but only used to recognise force-mode; the actual force power comes from the matching Max. |
+
+### Mode mapping
+
+The latest `OpMod` value (sticky between writes) is interpreted on every `40793` write:
+
+| OpMod | Effect on the SBSE controller |
+|---|---|
+| `2424` (Default/Normal/Block/Block-Charge/Block-Discharge) | P controller stays in charge. `BatChaMaxW` → `active_config.max_charge_w`, `BatDchgMaxW` → `active_config.max_discharge_w`, `GridWSpt` → `active_config.target_grid_w`. Force-mode is cleared. |
+| `2289` (Battery charging) | **Force charge.** P controller bypassed. Battery commanded at `−BatChaMaxW` W (charging). Mode reports `force_charge`. EMA on the setpoint, deadband, SoC clamps and `max_*` still apply on the output. |
+| `2290` (Battery discharging) | **Force discharge.** P controller bypassed. Battery commanded at `+BatDchgMaxW` W (discharging). Mode reports `force_discharge`. Same output filters as above. |
+
+Each `40793` write is mirrored into `active_config` immediately (visible at `GET /sbse_controller/active_config` and on the dashboard's sliders).
+
+### Arbitration
+
+"Last write wins" across **all** writers: Modbus, dashboard, HTTP `PUT /active_config`, and MQTT. An operator-driven `active_config` update, `force_release` or `resume` command also **drops force-mode and clears `modbus_active`** -- the operator is taking over. To re-engage, the Modbus client must send a fresh `40793` write.
+
+### Watchdog
+
+If the watchdog is enabled (`config.modbus_server_watchdog_s > 0`) and no Modbus write arrives within that many seconds, the live overrides (`target_grid_w`, `max_charge_w`, `max_discharge_w`) are reverted to the persistent `config` values and force-mode is cleared. SMA's own inverter watchdog runs at 5 minutes; the default of `60 s` here matches the resend interval that the WARP charger uses. Set to `0` to leave the most recent setpoint and force-mode in place indefinitely.
+
+### Example: cURL force-charge at 1500 W
+
+```bash
+# 40236: OpMod = 2289 (force charge)  →  bytes: 00 00 08 F1
+# 40793: BatChaMin = 1500, BatChaMax = 1500, rest zero  →  the relevant U32BE pair: 00 00 05 DC
+# Easier: use modbus-cli or pymodbus rather than crafting raw frames by hand.
+```
+
+### Example: pymodbus force-charge at 1500 W
+
+```python
+from pymodbus.client import ModbusTcpClient
+c = ModbusTcpClient("192.168.110.151", port=502)
+c.connect()
+
+# Step 1: OpMod = 2289 (force charge)
+c.write_registers(40236, [0, 2289], unit=3)
+
+# Step 2: BatChaMin = BatChaMax = 1500, others zero
+c.write_registers(40793, [
+    0, 1500,   # BatChaMinW
+    0, 1500,   # BatChaMaxW
+    0, 0,      # BatDchgMinW
+    0, 0,      # BatDchgMaxW
+    0, 0,      # GridWSpt
+], unit=3)
+
+c.close()
+```
+
+To release: write `OpMod = 2424` then `40793` with all-zeros (or non-zero `BatChaMaxW` / `BatDchgMaxW` for normal P-controller operation under those caps), or just send any `active_config` change from the dashboard.
 
 ## Controller loop in one diagram
 
