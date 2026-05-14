@@ -76,7 +76,10 @@ let x = {
             "max_discharge_w_help": <>Obergrenze für die Batterieentladeleistung. 0 verbietet das Entladen vollständig.</>,
 
             "kp":      "P-Verstärkung (Kp)",
-            "kp_help": <>Proportionale Verstärkung des Reglers. <code>neuer_sollwert = batterie_jetzt + Kp · (ema_netz − ziel)</code>. Niedriger = ruhiger; höher = schneller, aber kann schwingen.</>,
+            "kp_help": <>Proportionale Verstärkung des Reglers. <code>neuer_sollwert = batterie_jetzt + Kp · (ema_netz − ziel) + Kd · Δema_netz</code>. Niedriger = ruhiger; höher = schneller, aber kann schwingen.</>,
+
+            "kd":      "D-Verstärkung (Kd)",
+            "kd_help": <>Differentielle Verstärkung, berechnet aus der geglätteten Netzleistung (nicht aus dem Regelfehler – Sollwertänderungen erzeugen daher keinen D-Impuls). <code>0</code> deaktiviert den D-Anteil. Erhöhen, wenn schnelle Lastsprünge (Induktionsfeld, Wasserkocher) den P-Regler überschwingen lassen, bevor das Netz-EMA nachgezogen hat. Faustregel: bei <code>1,0</code> starten; auf <code>2,0</code>–<code>3,0</code> erhöhen, wenn das Überschwingen bleibt; reduzieren, wenn die Kurve zu schwingen beginnt.</>,
 
             "alpha_grid":      "Glättung Netz-Eingang (α)",
             "alpha_grid_help": <>EMA-Faktor für die Netzleistungsmessung. <code>α=1,0</code> = keine Glättung; kleinere Werte filtern stärker, dafür mit Verzögerung.</>,
