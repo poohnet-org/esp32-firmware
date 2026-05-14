@@ -463,6 +463,13 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                                        onValue={(v) => this.setState({kp_milli: Math.round(v * 1000)})}/>
                     </FormRow>
 
+                    <FormRow label={__("sbse_controller.content.kd")}
+                             help={__("sbse_controller.content.kd_help")}>
+                        <InputAnyFloat min={0.00} max={3.00}
+                                       value={state.kd_milli / 1000}
+                                       onValue={(v) => this.setState({kd_milli: Math.round(v * 1000)})}/>
+                    </FormRow>
+
                     <FormRow label={__("sbse_controller.content.alpha_grid")}
                              help={__("sbse_controller.content.alpha_grid_help")}>
                         <InputAnyFloat min={0.01} max={1.00}

@@ -102,6 +102,7 @@ private:
     int32_t  max_charge_w       = 5000;
     int32_t  max_discharge_w    = 5000;
     float    kp                 = 1.0f;
+    float    kd                 = 0.0f;          // D-on-measurement gain; 0 disables D
     float    alpha_grid         = 0.30f;
     float    alpha_setpoint     = 0.70f;
     int32_t  deadband_w         = 50;
@@ -123,6 +124,8 @@ private:
 
     bool     ema_grid_seeded    = false;
     float    ema_grid_w         = 0.0f;
+    bool     prev_ema_grid_seeded = false;       // gates D so the first cycle doesn't produce a kick
+    float    prev_ema_grid_w    = 0.0f;
     bool     ema_setpoint_seeded = false;
     float    ema_setpoint_w     = 0.0f;
 

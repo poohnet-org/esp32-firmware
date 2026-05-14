@@ -147,6 +147,7 @@ void SbseController::pre_setup()
         {"max_charge_w",     Config::Uint(5000, 0, 10000)},
         {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
         {"kp_milli",         Config::Uint(1000, 100, 2000)},  // Kp * 1000 in [0.1 .. 2.0]
+        {"kd_milli",         Config::Uint(0,    0, 3000)},    // Kd * 1000, 0 disables the D term
         {"alpha_grid_milli", Config::Uint(300, 10, 1000)},    // alpha * 1000 in (0.01 .. 1.0]
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
@@ -178,6 +179,7 @@ void SbseController::pre_setup()
         {"max_charge_w",     Config::Uint(5000, 0, 10000)},
         {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
         {"kp_milli",         Config::Uint(1000, 100, 2000)},
+        {"kd_milli",         Config::Uint(0,    0, 3000)},
         {"alpha_grid_milli", Config::Uint(300, 10, 1000)},
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
@@ -240,6 +242,7 @@ void SbseController::copy_live_tunable_to_active()
     active_config.get("max_charge_w")           ->updateUint(config.get("max_charge_w")         ->asUint());
     active_config.get("max_discharge_w")        ->updateUint(config.get("max_discharge_w")      ->asUint());
     active_config.get("kp_milli")               ->updateUint(config.get("kp_milli")             ->asUint());
+    active_config.get("kd_milli")               ->updateUint(config.get("kd_milli")             ->asUint());
     active_config.get("alpha_grid_milli")       ->updateUint(config.get("alpha_grid_milli")     ->asUint());
     active_config.get("alpha_setpoint_milli")   ->updateUint(config.get("alpha_setpoint_milli") ->asUint());
     active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
@@ -254,6 +257,7 @@ void SbseController::apply_runtime_from_active()
     max_charge_w    = static_cast<int32_t>(active_config.get("max_charge_w")->asUint());
     max_discharge_w = static_cast<int32_t>(active_config.get("max_discharge_w")->asUint());
     kp              = static_cast<float>(active_config.get("kp_milli")->asUint())             / 1000.0f;
+    kd              = static_cast<float>(active_config.get("kd_milli")->asUint())             / 1000.0f;
     alpha_grid      = static_cast<float>(active_config.get("alpha_grid_milli")->asUint())     / 1000.0f;
     alpha_setpoint  = static_cast<float>(active_config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
@@ -354,9 +358,10 @@ void SbseController::connect_callback(TFGenericTCPClientConnectResult result)
 
 void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*reason*/)
 {
-    cycle_in_flight     = false;
-    ema_grid_seeded     = false;
-    ema_setpoint_seeded = false;
+    cycle_in_flight       = false;
+    ema_grid_seeded       = false;
+    prev_ema_grid_seeded  = false;
+    ema_setpoint_seeded   = false;
     // Reset the safety-net streak so a fresh reconnect starts clean and can
     // re-trip the safety setpoint if failures resume.
     consecutive_failures = 0;
@@ -512,7 +517,7 @@ void SbseController::compute_and_write()
         state.get("read_fail_streak")->updateUint(0);
     }
 
-    // 1) Smooth grid (seed on first sample so the first cycle is correct)
+    // 1) Smooth grid (seed on first sample so the first cycle is correct).
     if (!ema_grid_seeded) {
         ema_grid_w        = static_cast<float>(grid_w_raw);
         ema_grid_seeded   = true;
@@ -521,9 +526,23 @@ void SbseController::compute_and_write()
                    + (1.0f - alpha_grid) * ema_grid_w;
     }
 
-    // 2) P-controller: nudge battery to drive grid power to target.
+    // 2) Derivative on the (smoothed) measurement, not on the error. This
+    //    anticipates fast load steps that the grid EMA would otherwise see
+    //    only after one or two cycles of lag, and -- by deriving on the
+    //    measurement -- avoids a derivative kick when the operator changes
+    //    target_grid_w. The first cycle after seeding contributes nothing.
+    float d_grid = 0.0f;
+    if (prev_ema_grid_seeded) {
+        d_grid = ema_grid_w - prev_ema_grid_w;
+    }
+    prev_ema_grid_w      = ema_grid_w;
+    prev_ema_grid_seeded = true;
+
+    // 3) P + implicit-I (via battery_w_raw) + D-on-measurement.
     const float delta_w = ema_grid_w - static_cast<float>(target_grid_w);
-    float raw_setpoint  = static_cast<float>(battery_w_raw) + kp * delta_w;
+    float raw_setpoint  = static_cast<float>(battery_w_raw)
+                        + kp * delta_w
+                        + kd * d_grid;
 
     // 3) SoC limits (only when we have a usable reading).
     if (soc_pct != 255) {

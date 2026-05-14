@@ -8,6 +8,7 @@ export interface config {
     max_charge_w: number;
     max_discharge_w: number;
     kp_milli: number;
+    kd_milli: number;
     alpha_grid_milli: number;
     alpha_setpoint_milli: number;
     deadband_w: number;
@@ -20,6 +21,7 @@ export interface active_config {
     max_charge_w: number;
     max_discharge_w: number;
     kp_milli: number;
+    kd_milli: number;
     alpha_grid_milli: number;
     alpha_setpoint_milli: number;
     deadband_w: number;

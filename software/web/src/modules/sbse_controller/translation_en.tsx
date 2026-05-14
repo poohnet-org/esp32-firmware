@@ -76,7 +76,10 @@ let x = {
             "max_discharge_w_help": <>Upper bound on battery discharging power. 0 forbids discharge.</>,
 
             "kp":      "P-gain (Kp)",
-            "kp_help": <>Proportional gain of the controller. <code>new_setpoint = battery_now + Kp · (ema_grid − target)</code>. Lower = slower, more damped. Higher = snappier but can ring.</>,
+            "kp_help": <>Proportional gain of the controller. <code>new_setpoint = battery_now + Kp · (ema_grid − target) + Kd · Δema_grid</code>. Lower = slower, more damped. Higher = snappier but can ring.</>,
+
+            "kd":      "D-gain (Kd)",
+            "kd_help": <>Derivative gain, computed on the smoothed grid measurement (not on the error, so changes to the target don't kick the output). <code>0</code> disables the D term entirely. Raise it if fast load steps (induction plate, kettle) cause the P-controller to overshoot before the grid EMA catches up. As a rule of thumb, start at <code>1.0</code>; increase toward <code>2.0</code>–<code>3.0</code> if overshoot persists; reduce if the chart starts oscillating.</>,
 
             "alpha_grid":      "Grid input smoothing (α)",
             "alpha_grid_help": <>EMA factor on the grid-power measurement. <code>α=1.0</code> disables smoothing; lower values filter more aggressively at the cost of lag.</>,
