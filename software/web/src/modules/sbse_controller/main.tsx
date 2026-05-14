@@ -33,6 +33,7 @@ import { Switch } from "../../ts/components/switch";
 import { SwitchableInputNumber } from "../../ts/components/switchable_input_number";
 import { UplotLoader } from "../../ts/components/uplot_loader";
 import { UplotData, UplotPath, UplotWrapperB } from "../../ts/components/uplot_wrapper_2nd";
+import { ModuleStatus, register_status_provider, StatusResult } from "../../ts/status_registry";
 
 // ---------------------------------------------------------------------------
 // Common helpers
@@ -122,15 +123,37 @@ export function SbseControllerNavbar() {
 
 interface SbseControllerStatusState {
     target_input: number;          // pending value in the slider/input
+    samples: Sample[];             // sliding-window buffer for the live trace
 }
 
 export class SbseControllerStatus extends Component<{}, SbseControllerStatusState> {
     constructor() {
         super();
-        this.state = { target_input: 0 };
+        this.state = { target_input: 0, samples: [] };
 
         util.addApiEventListener("sbse_controller/active_config", () => {
             this.setState({target_input: API.get("sbse_controller/active_config").target_grid_w});
+        });
+
+        util.addApiEventListener("sbse_controller/state", () => {
+            const st = API.get("sbse_controller/state");
+            const ac = API.get("sbse_controller/active_config");
+            const samples = [...this.state.samples];
+            const now = Date.now() / 1000;
+
+            samples.push({
+                ts:       now,
+                grid:     st.grid_w_ema,
+                battery:  st.battery_w,
+                setpoint: st.last_setpoint_w,
+                target:   ac.target_grid_w,
+            });
+
+            const cutoff = now - CHART_WINDOW_S;
+            while (samples.length > 0 && samples[0].ts < cutoff) {
+                samples.shift();
+            }
+            this.setState({samples});
         });
     }
 
@@ -191,6 +214,10 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                                       value={`${st.write_err_count}`}
                                       accent={st.write_err_count > 0 ? "danger" : null}/>
                         </div>
+
+                        <hr/>
+
+                        <SbseControllerChart samples={this.state.samples}/>
 
                         <hr/>
 
@@ -306,7 +333,7 @@ class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
                              loading={__("sbse_controller.chart.loading")}>
                     <UplotWrapperB ref={this.uplot_wrapper_ref}
                                    class="sbse-chart"
-                                   sub_page="sbse_controller"
+                                   sub_page="status"
                                    color_cache_group="sbse_controller.default"
                                    show
                                    legend_show
@@ -335,46 +362,15 @@ class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
 
 type ControllerConfig = API.getType["sbse_controller/config"];
 
-interface SbseControllerExtraState {
-    samples: Sample[];
-}
-
 export class SbseController extends ConfigComponent<"sbse_controller/config",
-                                                    {status_ref?: RefObject<SbseControllerStatus>},
-                                                    SbseControllerExtraState> {
+                                                    {status_ref?: RefObject<SbseControllerStatus>}> {
     constructor() {
         super("sbse_controller/config",
               () => __("sbse_controller.script.save_failed"));
-
-        this.state = {...this.state, samples: []};
-
-        util.addApiEventListener("sbse_controller/state", () => {
-            const st = API.get("sbse_controller/state");
-            const ac = API.get("sbse_controller/active_config");
-
-            const samples = [...(this.state.samples ?? [])];
-            const now = Date.now() / 1000;
-
-            samples.push({
-                ts:       now,
-                grid:     st.grid_w_ema,
-                battery:  st.battery_w,
-                setpoint: st.last_setpoint_w,
-                target:   ac.target_grid_w,
-            });
-
-            // Trim to sliding window.
-            const cutoff = now - CHART_WINDOW_S;
-            while (samples.length > 0 && samples[0].ts < cutoff) {
-                samples.shift();
-            }
-
-            this.setState({samples});
-        });
     }
 
     render(props: {status_ref?: RefObject<SbseControllerStatus>},
-           state: ControllerConfig & SbseControllerExtraState) {
+           state: ControllerConfig) {
         if (!util.render_allowed())
             return <SubPage name="sbse_controller"/>;
 
@@ -490,17 +486,69 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                     </FormRow>
 
                 </ConfigForm>
-
-                <FormSeparator heading={__("sbse_controller.content.section_chart")}/>
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <SbseControllerChart samples={state.samples}/>
-                    </div>
-                </div>
             </SubPage>
         );
     }
 }
 
+// ---------------------------------------------------------------------------
+// Status provider (top-right header badge)
+// ---------------------------------------------------------------------------
+
+function build_status(): StatusResult | null {
+    if (!API.hasModule("sbse_controller")) {
+        return null;
+    }
+
+    const st = API.get("sbse_controller/state");
+    const ac = API.get("sbse_controller/active_config");
+
+    if (!st || !ac) {
+        return null;
+    }
+
+    switch (st.mode) {
+        case "disabled":
+            return {
+                status: ModuleStatus.Disabled,
+                text:   () => mode_label(st.mode),
+            };
+        case "running":
+            return {
+                status: ModuleStatus.Ok,
+                text:   () => `${fmt_w(st.grid_w_ema)} W → ${fmt_w(ac.target_grid_w)} W`,
+            };
+        case "stale":
+        case "paused":
+        case "not_connected":
+            return {
+                status: ModuleStatus.Warning,
+                text:   () => st.last_error && st.last_error.length > 0
+                              ? st.last_error
+                              : mode_label(st.mode),
+            };
+        case "safety":
+        case "faulted":
+            return {
+                status: ModuleStatus.Error,
+                text:   () => st.last_error && st.last_error.length > 0
+                              ? st.last_error
+                              : mode_label(st.mode),
+            };
+        default:
+            return {
+                status: ModuleStatus.Warning,
+                text:   () => mode_label(st.mode),
+            };
+    }
+}
+
 export function pre_init() {}
-export function init() {}
+
+export function init() {
+    register_status_provider("sbse_controller", {
+        name: () => __("sbse_controller.navbar.title"),
+        href: "#sbse_controller",
+        get_status: build_status,
+    });
+}
