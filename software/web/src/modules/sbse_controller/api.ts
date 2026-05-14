@@ -12,6 +12,7 @@ export interface config {
     alpha_setpoint_milli: number;
     deadband_w: number;
     safety_zero_after_failures: number;
+    simulation_mode: boolean;
 }
 
 export interface active_config {
@@ -23,6 +24,7 @@ export interface active_config {
     alpha_setpoint_milli: number;
     deadband_w: number;
     safety_zero_after_failures: number;
+    simulation_mode: boolean;
 }
 
 export interface state {
@@ -36,6 +38,7 @@ export interface state {
     write_ok_count: number;
     write_err_count: number;
     read_fail_streak: number;
+    simulation_mode: boolean;
     last_error: string;
 }
 
