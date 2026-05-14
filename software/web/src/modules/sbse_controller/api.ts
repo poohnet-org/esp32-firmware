@@ -14,6 +14,10 @@ export interface config {
     deadband_w: number;
     safety_zero_after_failures: number;
     simulation_mode: boolean;
+    modbus_server_enabled: boolean;
+    modbus_server_port: number;
+    modbus_server_unit_id: number;
+    modbus_server_watchdog_s: number;
 }
 
 export interface active_config {
@@ -41,6 +45,9 @@ export interface state {
     write_err_count: number;
     read_fail_streak: number;
     simulation_mode: boolean;
+    modbus_active: boolean;
+    modbus_op_mod: number;
+    modbus_force_w: number;
     last_error: string;
 }
 

@@ -39,28 +39,33 @@ import { ModuleStatus, register_status_provider, StatusResult } from "../../ts/s
 // Common helpers
 // ---------------------------------------------------------------------------
 
-type Mode = "disabled" | "not_connected" | "stale" | "running" | "paused" | "safety" | "faulted";
+type Mode = "disabled" | "not_connected" | "stale" | "running" | "paused" | "safety" | "faulted"
+          | "force_charge" | "force_discharge";
 
 const MODE_VARIANT: { [m: string]: string } = {
-    running:       "success",
-    stale:         "warning",
-    paused:        "warning",
-    safety:        "danger",
-    faulted:       "danger",
-    not_connected: "secondary",
-    disabled:      "secondary",
+    running:         "success",
+    stale:           "warning",
+    paused:          "warning",
+    safety:          "danger",
+    faulted:         "danger",
+    not_connected:   "secondary",
+    disabled:        "secondary",
+    force_charge:    "primary",
+    force_discharge: "primary",
 };
 
 function mode_label(mode: string): string {
     switch (mode) {
-        case "disabled":      return __("sbse_controller.status.mode_disabled");
-        case "not_connected": return __("sbse_controller.status.mode_not_connected");
-        case "stale":         return __("sbse_controller.status.mode_stale");
-        case "running":       return __("sbse_controller.status.mode_running");
-        case "paused":        return __("sbse_controller.status.mode_paused");
-        case "safety":        return __("sbse_controller.status.mode_safety");
-        case "faulted":       return __("sbse_controller.status.mode_faulted");
-        default:              return mode;
+        case "disabled":        return __("sbse_controller.status.mode_disabled");
+        case "not_connected":   return __("sbse_controller.status.mode_not_connected");
+        case "stale":           return __("sbse_controller.status.mode_stale");
+        case "running":         return __("sbse_controller.status.mode_running");
+        case "paused":          return __("sbse_controller.status.mode_paused");
+        case "safety":          return __("sbse_controller.status.mode_safety");
+        case "faulted":         return __("sbse_controller.status.mode_faulted");
+        case "force_charge":    return __("sbse_controller.status.mode_force_charge");
+        case "force_discharge": return __("sbse_controller.status.mode_force_discharge");
+        default:                return mode;
     }
 }
 
@@ -71,6 +76,8 @@ function ModeBadge({mode}: {mode: string}) {
                : mode === "paused" ? <Pause size={14}/>
                : mode === "not_connected" ? <WifiOff size={14}/>
                : mode === "stale" ? <Wifi size={14}/>
+               : mode === "force_charge" ? <BatteryCharging size={14}/>
+               : mode === "force_discharge" ? <Battery size={14}/>
                : <Activity size={14}/>;
     return (
         <span class={`badge bg-${variant} sbse-mode-pill`}>
@@ -252,6 +259,13 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
                         <div class="d-flex align-items-center gap-2">
+                            {st.modbus_active ?
+                                <span class="badge bg-primary sbse-mode-pill"
+                                      title={__("sbse_controller.status.mb_badge_help_title")}>
+                                    <Activity size={14}/>
+                                    <span class="ms-1">{__("sbse_controller.status.mb_badge")}</span>
+                                </span>
+                            : null}
                             {st.simulation_mode ?
                                 <span class="badge bg-info sbse-mode-pill">
                                     <AlertTriangle size={14}/>
@@ -593,6 +607,46 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                             switch_label_min_width="110px"/>
                     </FormRow>
 
+                    <FormSeparator heading={__("sbse_controller.content.section_modbus_server")}/>
+
+                    <FormRow label={__("sbse_controller.content.modbus_server_enabled")}
+                             help={__("sbse_controller.content.modbus_server_enabled_help")}>
+                        <Switch desc={__("sbse_controller.content.modbus_server_enabled_desc")}
+                                checked={state.modbus_server_enabled}
+                                onClick={this.toggle("modbus_server_enabled")}/>
+                    </FormRow>
+
+                    <FormRow label={__("sbse_controller.content.modbus_server_port")}
+                             help={__("sbse_controller.content.modbus_server_port_help")}>
+                        <InputNumber min={1} max={65535}
+                                     value={state.modbus_server_port}
+                                     onValue={this.set("modbus_server_port")}/>
+                    </FormRow>
+
+                    <FormRow label={__("sbse_controller.content.modbus_server_unit_id")}
+                             help={__("sbse_controller.content.modbus_server_unit_id_help")}>
+                        <InputNumber min={0} max={247}
+                                     value={state.modbus_server_unit_id}
+                                     onValue={this.set("modbus_server_unit_id")}/>
+                    </FormRow>
+
+                    <FormRow label={__("sbse_controller.content.modbus_server_watchdog_s")}
+                             help={__("sbse_controller.content.modbus_server_watchdog_s_help")}>
+                        <SwitchableInputNumber
+                            switch_label_active={__("sbse_controller.content.enabled_label")}
+                            switch_label_inactive={__("sbse_controller.content.disabled_label")}
+                            checked={state.modbus_server_watchdog_s > 0}
+                            onClick={() => this.setState({
+                                modbus_server_watchdog_s: state.modbus_server_watchdog_s > 0 ? 0 : 60,
+                            })}
+                            value={state.modbus_server_watchdog_s}
+                            onValue={(v) => this.setState({modbus_server_watchdog_s: v})}
+                            min={1}
+                            max={3600}
+                            unit="s"
+                            switch_label_min_width="110px"/>
+                    </FormRow>
+
                 </ConfigForm>
             </SubPage>
         );
@@ -627,6 +681,12 @@ function build_status(): StatusResult | null {
             return {
                 status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
                 text:   () => `${fmt_w(st.grid_w_ema)} W → ${fmt_w(ac.target_grid_w)} W` + sim_suffix,
+            };
+        case "force_charge":
+        case "force_discharge":
+            return {
+                status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
+                text:   () => `${mode_label(st.mode)} ${fmt_w(st.modbus_force_w)} W` + sim_suffix,
             };
         case "stale":
         case "paused":

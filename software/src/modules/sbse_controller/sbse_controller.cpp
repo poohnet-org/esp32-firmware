@@ -27,6 +27,7 @@
 
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
+#include "tools/net.h"
 
 #include "gcc_warnings.h"
 
@@ -76,6 +77,42 @@ static constexpr micros_t MODBUS_TIMEOUT             = 2_s;
 static constexpr micros_t FORCE_RELEASE_HOLD         = 30_s;
 
 // ---------------------------------------------------------------------------
+// SMA-compatible Modbus TCP server (incoming external control)
+//
+// The wire protocol matches the registers the WARP charger's
+// `batteries_modbus_tcp` SMA Hybrid Inverter battery class writes to a real
+// SMA Sunny Boy Storage. We accept the same WriteMultipleRegisters traffic so
+// a WARP charger configured for "SMA Hybrid Inverter" steering can target the
+// SBSE controller's IP and have it Do The Right Thing.
+//
+//   40236 (2 reg, U32BE)  CmpBMS.OpMod
+//                           2424 = Default/Normal  -> P-controller in charge
+//                           2289 = Battery charging -> force charge
+//                           2290 = Battery discharging -> force discharge
+//
+//   40793 (10 reg, 5 x U32BE)  CmpBMS.XYZ
+//     [0]  BatChaMinW   - Min battery charging power [W]
+//     [1]  BatChaMaxW   - Max battery charging power [W]
+//     [2]  BatDchgMinW  - Min battery discharging power [W]
+//     [3]  BatDchgMaxW  - Max battery discharging power [W]
+//     [4]  GridWSpt     - Grid transfer power setpoint [W, signed via U32]
+// ---------------------------------------------------------------------------
+
+static constexpr uint16_t MODBUS_SRV_OPMOD_ADDR       = 40236;
+static constexpr uint16_t MODBUS_SRV_OPMOD_REG_COUNT  = 2;
+static constexpr uint16_t MODBUS_SRV_SETP_ADDR        = 40793;
+static constexpr uint16_t MODBUS_SRV_SETP_REG_COUNT   = 10;
+
+static constexpr uint16_t SMA_OPMOD_DEFAULT           = 2424;
+static constexpr uint16_t SMA_OPMOD_FORCE_CHARGE      = 2289;
+static constexpr uint16_t SMA_OPMOD_FORCE_DISCHARGE   = 2290;
+
+// Server tick cadence. The TFModbusTCPServer drives I/O from this; lower =
+// snappier response, higher = less scheduler churn. 20 ms is plenty for a
+// device that sees <1 write/s in normal use.
+static constexpr millis_t MODBUS_SRV_TICK             = 20_ms;
+
+// ---------------------------------------------------------------------------
 
 static int32_t read_int32be(const uint16_t *buf)
 {
@@ -100,14 +137,16 @@ static void write_int32be(uint16_t *buf, int32_t value)
 static const char *mode_name(SbseController::Mode m)
 {
     switch (m) {
-        case SbseController::Mode::Disabled:     return "disabled";
-        case SbseController::Mode::NotConnected: return "not_connected";
-        case SbseController::Mode::Stale:        return "stale";
-        case SbseController::Mode::Running:      return "running";
-        case SbseController::Mode::Faulted:      return "faulted";
-        case SbseController::Mode::Paused:       return "paused";
-        case SbseController::Mode::Safety:       return "safety";
-        default:                                 return "?";
+        case SbseController::Mode::Disabled:       return "disabled";
+        case SbseController::Mode::NotConnected:   return "not_connected";
+        case SbseController::Mode::Stale:          return "stale";
+        case SbseController::Mode::Running:        return "running";
+        case SbseController::Mode::Faulted:        return "faulted";
+        case SbseController::Mode::Paused:         return "paused";
+        case SbseController::Mode::Safety:         return "safety";
+        case SbseController::Mode::ForceCharge:    return "force_charge";
+        case SbseController::Mode::ForceDischarge: return "force_discharge";
+        default:                                   return "?";
     }
 }
 
@@ -153,6 +192,12 @@ void SbseController::pre_setup()
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},  // 0 disables
         {"simulation_mode",  Config::Bool(false)},
+        // SMA-compatible Modbus TCP server. All four fields are init-only:
+        // changing them stops/starts the server but doesn't touch active_config.
+        {"modbus_server_enabled",     Config::Bool(false)},
+        {"modbus_server_port",        Config::Uint16(502)},
+        {"modbus_server_unit_id",     Config::Uint(3, 0, 247)},   // 0 = accept any
+        {"modbus_server_watchdog_s",  Config::Uint(60, 0, 3600)},  // 0 disables
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
         // target_grid_w is a setpoint (a desired value), max_charge_w /
         // max_discharge_w are actuator saturation limits. They're orthogonal:
@@ -202,6 +247,9 @@ void SbseController::pre_setup()
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
         {"simulation_mode",   Config::Bool(false)},
+        {"modbus_active",     Config::Bool(false)},
+        {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
+        {"modbus_force_w",    Config::Int32(0)},
         {"last_error",        Config::Str("", 0, 64)},
     });
 }
@@ -225,6 +273,11 @@ void SbseController::load_init_only_from_config()
 
     host = config.get("host")->asString();
     port = static_cast<uint16_t>(config.get("port")->asUint());
+
+    modbus_server_enabled     = config.get("modbus_server_enabled")->asBool();
+    modbus_server_port        = config.get("modbus_server_port")->asUint16();
+    modbus_server_unit_id     = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
+    modbus_server_watchdog_ms = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
 }
 
 void SbseController::copy_live_tunable_to_active()
@@ -276,13 +329,40 @@ void SbseController::register_urls()
         // require a reboot.
         copy_live_tunable_to_active();
         apply_runtime_from_active();
+
+        // Refresh Modbus server config and bounce the listener if the relevant
+        // fields changed. Cheap (server.start binds 0.0.0.0:port once); always
+        // restart even on no-op for simplicity.
+        bool was_enabled = modbus_server_running;
+        uint16_t was_port = modbus_server_port;
+        modbus_server_enabled     = config.get("modbus_server_enabled")->asBool();
+        modbus_server_port        = config.get("modbus_server_port")->asUint16();
+        modbus_server_unit_id     = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
+        modbus_server_watchdog_ms = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
+        if (modbus_server_enabled != was_enabled || modbus_server_port != was_port) {
+            restart_modbus_server();
+        }
     }, false);
 
-    // Live-tunable runtime overlay (no flash write).
+    // Live-tunable runtime overlay (no flash write). HTTP/MQTT writes go
+    // through this command callback; internal Modbus dispatch mutates
+    // active_config directly to avoid clearing its own force-mode state.
     api.addState("sbse_controller/active_config", &active_config);
     api.addCommand("sbse_controller/active_config_update", &active_config, {},
                    [this](Language /*language*/, String &/*errmsg*/) {
         apply_runtime_from_active();
+        // Operator (dashboard / HTTP / MQTT) takeover -- release any Modbus
+        // force-mode setpoint so the P controller is back in charge of
+        // hitting the new target.
+        if (modbus_force_w != 0 || modbus_active) {
+            logger.printfln("operator override -- releasing Modbus force-mode setpoint");
+        }
+        modbus_force_w = 0;
+        modbus_op_mod  = SMA_OPMOD_DEFAULT;
+        modbus_active  = false;
+        state.get("modbus_active")->updateBool(false);
+        state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
+        state.get("modbus_force_w")->updateInt(0);
     }, false);
 
     api.addState("sbse_controller/state", &state);
@@ -291,6 +371,13 @@ void SbseController::register_urls()
                    [this](Language /*language*/, String &/*errmsg*/) {
         paused       = true;
         paused_until = now_us() + FORCE_RELEASE_HOLD;
+        // Operator takeover: drop any Modbus force-mode state too.
+        modbus_force_w = 0;
+        modbus_op_mod  = SMA_OPMOD_DEFAULT;
+        modbus_active  = false;
+        state.get("modbus_active")->updateBool(false);
+        state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
+        state.get("modbus_force_w")->updateInt(0);
         send_release();
         publish_mode(Mode::Paused);
         logger.printfln("force_release: pausing setpoint loop for %lld s",
@@ -304,6 +391,13 @@ void SbseController::register_urls()
         }
         paused       = false;
         paused_until = -1_us;
+        // Operator takeover. (Idempotent if already cleared by force_release.)
+        modbus_force_w = 0;
+        modbus_op_mod  = SMA_OPMOD_DEFAULT;
+        modbus_active  = false;
+        state.get("modbus_active")->updateBool(false);
+        state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
+        state.get("modbus_force_w")->updateInt(0);
 
         // Publish a plausible mode immediately so the dashboard doesn't sit on
         // "paused" until the next tick fires. The tick will correct it if
@@ -335,6 +429,10 @@ void SbseController::register_events()
     tick_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
         this->tick();
     }, tick_ms, tick_ms);
+
+    if (modbus_server_enabled) {
+        start_modbus_server();
+    }
 }
 
 void SbseController::pre_reboot()
@@ -343,6 +441,8 @@ void SbseController::pre_reboot()
         task_scheduler.cancel(tick_task_id);
         tick_task_id = 0;
     }
+
+    stop_modbus_server();
 
     // Best-effort 0 W write so the inverter isn't left holding a stale
     // active setpoint across our reboot. Fire-and-forget; the connection
@@ -425,6 +525,8 @@ bool SbseController::begin_cycle()
 
 void SbseController::tick()
 {
+    watchdog_tick();
+
     if (!begin_cycle()) {
         return;
     }
@@ -553,11 +655,22 @@ void SbseController::compute_and_write()
     prev_ema_grid_w      = ema_grid_w;
     prev_ema_grid_seeded = true;
 
-    // 3) P + implicit-I (via battery_w_raw) + D-on-measurement.
-    const float delta_w = ema_grid_w - static_cast<float>(target_grid_w);
-    float raw_setpoint  = static_cast<float>(battery_w_raw)
-                        + kp * delta_w
-                        + kd * d_grid;
+    // 3a) Force-mode bypass. A Modbus client commanded a fixed battery power
+    //     via SMA OpMod 2289 (charge) or 2290 (discharge). Skip the P loop,
+    //     skip the grid EMA derivative -- command the exact requested watts.
+    //     Output filtering (EMA on setpoint, deadband, SoC clamp) still
+    //     applies so a force command can't bypass safety or thrash the bus.
+    //
+    // 3b) Otherwise: P + implicit-I (via battery_w_raw) + D-on-measurement.
+    float raw_setpoint;
+    if (modbus_force_w != 0) {
+        raw_setpoint = static_cast<float>(modbus_force_w);
+    } else {
+        const float delta_w = ema_grid_w - static_cast<float>(target_grid_w);
+        raw_setpoint = static_cast<float>(battery_w_raw)
+                     + kp * delta_w
+                     + kd * d_grid;
+    }
 
     // 3) SoC limits (only when we have a usable reading).
     if (soc_pct != 255) {
@@ -600,7 +713,7 @@ void SbseController::compute_and_write()
     //    indefinitely (no internal-control fallback), so there is no
     //    watchdog to satisfy. This cuts write traffic and cell churn.
     if (last_write_ok != -1_us && std::abs(target_w - last_written_w) < deadband_w) {
-        finish_cycle(Mode::Running);
+        finish_cycle(current_running_mode());
         return;
     }
 
@@ -619,7 +732,7 @@ void SbseController::send_setpoint(int32_t watts)
         ++write_ok_count;
         state.get("write_ok_count")->updateUint(write_ok_count);
         publish_setpoint(watts);
-        finish_cycle(Mode::Running);
+        finish_cycle(current_running_mode());
         return;
     }
 
@@ -660,7 +773,7 @@ void SbseController::send_setpoint(int32_t watts)
         state.get("write_ok_count")->updateUint(write_ok_count);
 
         publish_setpoint(watts);
-        finish_cycle(Mode::Running);
+        finish_cycle(current_running_mode());
     });
 }
 
@@ -796,4 +909,209 @@ void SbseController::publish_mode(Mode mode)
         const millis_t age = (now_us() - last_write_ok).to<millis_t>();
         state.get("last_write_age_ms")->updateUint(static_cast<uint32_t>(age.t));
     }
+}
+
+SbseController::Mode SbseController::current_running_mode() const
+{
+    // Selects which "is running" Mode the controller should report.
+    // ForceCharge/Discharge are visually distinct in the dashboard pill so the
+    // operator can see at a glance that an external Modbus client is steering.
+    if (modbus_force_w < 0) {
+        return Mode::ForceCharge;
+    }
+    if (modbus_force_w > 0) {
+        return Mode::ForceDischarge;
+    }
+    return Mode::Running;
+}
+
+// ---------------------------------------------------------------------------
+// SMA-compatible Modbus TCP server
+// ---------------------------------------------------------------------------
+
+void SbseController::start_modbus_server()
+{
+    if (modbus_server_running || !modbus_server_enabled) {
+        return;
+    }
+
+    const bool ok = modbus_server.start(
+        0, modbus_server_port,
+        [](uint32_t peer_address, uint16_t peer_port) {
+            char peer_str[INET_ADDRSTRLEN];
+            tf_ip4addr_ntoa(&peer_address, peer_str, sizeof(peer_str));
+            logger.printfln("modbus server: client %s:%u connected", peer_str, peer_port);
+        },
+        [](uint32_t peer_address, uint16_t peer_port,
+           TFModbusTCPServerDisconnectReason reason, int error_number) {
+            char peer_str[INET_ADDRSTRLEN];
+            tf_ip4addr_ntoa(&peer_address, peer_str, sizeof(peer_str));
+            logger.printfln("modbus server: client %s:%u disconnected: %s (error %d)",
+                            peer_str, peer_port,
+                            get_tf_modbus_tcp_server_client_disconnect_reason_name(reason),
+                            error_number);
+        },
+        [this](uint8_t unit_id, TFModbusTCPFunctionCode function_code,
+               uint16_t start_address, uint16_t data_count, void *data_values) {
+            return this->dispatch_modbus(unit_id, function_code, start_address,
+                                         data_count, static_cast<const uint16_t *>(data_values));
+        });
+
+    if (!ok) {
+        logger.printfln("modbus server: failed to start on port %u", modbus_server_port);
+        return;
+    }
+
+    modbus_server_running = true;
+    modbus_server_tick_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
+        modbus_server.tick();
+    }, MODBUS_SRV_TICK, MODBUS_SRV_TICK);
+
+    logger.printfln("modbus server: listening on port %u, unit_id=%u, watchdog=%lus",
+                    modbus_server_port,
+                    static_cast<unsigned>(modbus_server_unit_id),
+                    modbus_server_watchdog_ms / 1000u);
+}
+
+void SbseController::stop_modbus_server()
+{
+    if (!modbus_server_running) {
+        return;
+    }
+
+    if (modbus_server_tick_task_id != 0) {
+        task_scheduler.cancel(modbus_server_tick_task_id);
+        modbus_server_tick_task_id = 0;
+    }
+    modbus_server.stop();
+    modbus_server_running = false;
+    logger.printfln("modbus server: stopped");
+}
+
+void SbseController::restart_modbus_server()
+{
+    stop_modbus_server();
+    if (modbus_server_enabled) {
+        start_modbus_server();
+    }
+}
+
+TFModbusTCPExceptionCode SbseController::dispatch_modbus(
+    uint8_t unit_id,
+    TFModbusTCPFunctionCode function_code,
+    uint16_t start_address,
+    uint16_t data_count,
+    const uint16_t *data_values)
+{
+    // Unit ID filter. 0 means "accept any unit" (broadcast-style).
+    if (modbus_server_unit_id != 0 && unit_id != modbus_server_unit_id) {
+        return TFModbusTCPExceptionCode::IllegalDataAddress;
+    }
+
+    // Only WriteMultipleRegisters at the two SMA register blocks is accepted.
+    // Everything else returns IllegalFunction / IllegalDataAddress so a
+    // confused client gets a clear error instead of silent acceptance.
+    if (function_code != TFModbusTCPFunctionCode::WriteMultipleRegisters) {
+        return TFModbusTCPExceptionCode::IllegalFunction;
+    }
+
+    if (start_address == MODBUS_SRV_OPMOD_ADDR && data_count == MODBUS_SRV_OPMOD_REG_COUNT) {
+        // 40236: CmpBMS.OpMod (U32BE). Latch for the next 40793 write. We
+        // accept the three documented SMA values (2289/2290/2424); anything
+        // else is treated as "Default" so a buggy client can't trap us in a
+        // force-mode we can't get out of without a reboot.
+        uint32_t op_mod = (static_cast<uint32_t>(data_values[0]) << 16) | data_values[1];
+        if (op_mod == SMA_OPMOD_FORCE_CHARGE
+            || op_mod == SMA_OPMOD_FORCE_DISCHARGE
+            || op_mod == SMA_OPMOD_DEFAULT) {
+            modbus_op_mod = static_cast<uint16_t>(op_mod);
+        } else {
+            modbus_op_mod = SMA_OPMOD_DEFAULT;
+        }
+        state.get("modbus_op_mod")->updateUint(modbus_op_mod);
+        return TFModbusTCPExceptionCode::Success;
+    }
+
+    if (start_address == MODBUS_SRV_SETP_ADDR && data_count == MODBUS_SRV_SETP_REG_COUNT) {
+        apply_modbus_setpoint_block(data_values);
+        return TFModbusTCPExceptionCode::Success;
+    }
+
+    return TFModbusTCPExceptionCode::IllegalDataAddress;
+}
+
+void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
+{
+    // 40793: 5 x U32BE. Indices: [0]=BatChaMinW, [1]=BatChaMaxW,
+    // [2]=BatDchgMinW, [3]=BatDchgMaxW, [4]=GridWSpt.
+    auto u32 = [&](int i) -> uint32_t {
+        return (static_cast<uint32_t>(data_values[2 * i]) << 16) | data_values[2 * i + 1];
+    };
+    const uint32_t bat_cha_max  = u32(1);
+    const uint32_t bat_dchg_max = u32(3);
+    const int32_t  grid_spt     = static_cast<int32_t>(u32(4));
+
+    // Clamp to the SBSE controller's own range. The Config types would reject
+    // out-of-range values; we mirror their bounds here so the Modbus client
+    // sees Success instead of a generic error.
+    auto clamp_w = [](uint32_t v) -> uint32_t { return v > 10000u ? 10000u : v; };
+    const uint32_t max_charge_clamped    = clamp_w(bat_cha_max);
+    const uint32_t max_discharge_clamped = clamp_w(bat_dchg_max);
+    const int32_t  target_clamped        = std::clamp(grid_spt, int32_t{-10000}, int32_t{10000});
+
+    // Interpret OpMod. Force modes bypass the P controller (see compute_and_write
+    // step 3a). OpMod 2424 lets the P controller drive against the new caps and
+    // target.
+    if (modbus_op_mod == SMA_OPMOD_FORCE_CHARGE) {
+        modbus_force_w = -static_cast<int32_t>(max_charge_clamped);
+    } else if (modbus_op_mod == SMA_OPMOD_FORCE_DISCHARGE) {
+        modbus_force_w =  static_cast<int32_t>(max_discharge_clamped);
+    } else {
+        modbus_force_w = 0;
+    }
+
+    // Mutate active_config in place. This auto-publishes via the API event
+    // bus (so MQTT / dashboard see the new values immediately) but skips the
+    // active_config_update command handler -- which would otherwise clear
+    // the force-mode state we just set.
+    active_config.get("target_grid_w")  ->updateInt (target_clamped);
+    active_config.get("max_charge_w")   ->updateUint(max_charge_clamped);
+    active_config.get("max_discharge_w")->updateUint(max_discharge_clamped);
+    apply_runtime_from_active();
+
+    last_modbus_write_us = now_us();
+    modbus_active        = true;
+    state.get("modbus_active") ->updateBool(true);
+    state.get("modbus_force_w")->updateInt (modbus_force_w);
+}
+
+void SbseController::revert_modbus_overrides()
+{
+    // Restore the live-tunable subset from the persistent config and clear
+    // every Modbus-driven runtime field. Called by the watchdog when no
+    // Modbus traffic has arrived within the configured timeout.
+    copy_live_tunable_to_active();
+    apply_runtime_from_active();
+
+    modbus_force_w = 0;
+    modbus_op_mod  = SMA_OPMOD_DEFAULT;
+    modbus_active  = false;
+    last_modbus_write_us = -1_us;
+    state.get("modbus_active") ->updateBool(false);
+    state.get("modbus_op_mod") ->updateUint(SMA_OPMOD_DEFAULT);
+    state.get("modbus_force_w")->updateInt (0);
+}
+
+void SbseController::watchdog_tick()
+{
+    if (!modbus_active || modbus_server_watchdog_ms == 0 || last_modbus_write_us == -1_us) {
+        return;
+    }
+    const micros_t timeout{static_cast<int64_t>(modbus_server_watchdog_ms) * 1000};
+    if (!deadline_elapsed(last_modbus_write_us + timeout)) {
+        return;
+    }
+    logger.printfln("modbus watchdog: no client traffic for %lus, reverting to persistent config",
+                    modbus_server_watchdog_ms / 1000u);
+    revert_modbus_overrides();
 }

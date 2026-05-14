@@ -23,6 +23,7 @@
 
 #include <TFModbusTCPClient.h>
 #include <TFModbusTCPClientPool.h>
+#include <TFModbusTCPServer.h>
 #include <TFTools/Micros.h>
 
 #include "config.h"
@@ -47,13 +48,15 @@ public:
     void pre_reboot() override;
 
     enum class Mode : uint8_t {
-        Disabled     = 0,
-        NotConnected = 1,
-        Stale        = 2,
-        Running      = 3,
-        Faulted      = 4,
-        Paused       = 5,
-        Safety       = 6,
+        Disabled       = 0,
+        NotConnected   = 1,
+        Stale          = 2,
+        Running        = 3,
+        Faulted        = 4,
+        Paused         = 5,
+        Safety         = 6,
+        ForceCharge    = 7,
+        ForceDischarge = 8,
     };
 
 private:
@@ -71,6 +74,19 @@ private:
     void send_setpoint(int32_t watts);
     void send_release();
     void send_safety_zero();
+
+    // Modbus TCP server (external SMA-compatible control)
+    void start_modbus_server();
+    void stop_modbus_server();
+    void restart_modbus_server();
+    TFModbusTCPExceptionCode dispatch_modbus(uint8_t unit_id,
+                                             TFModbusTCPFunctionCode function_code,
+                                             uint16_t start_address,
+                                             uint16_t data_count,
+                                             const uint16_t *data_values);
+    void apply_modbus_setpoint_block(const uint16_t *data_values);
+    void revert_modbus_overrides();      // watchdog expiry / operator takeover
+    void watchdog_tick();
     void cycle_failed(const char *where,
                       TFModbusTCPClientTransactionResult result,
                       const char *error_message);
@@ -78,6 +94,7 @@ private:
 
     void publish_setpoint(int32_t watts);
     void publish_mode(Mode mode);
+    Mode current_running_mode() const;
 
     // Reconfiguration helpers
     void load_init_only_from_config();         // init-only fields (host, port, tick_ms, ...)
@@ -108,6 +125,30 @@ private:
     int32_t  deadband_w         = 50;
     uint32_t safety_zero_after_failures = 5;  // 0 disables the safety net
     bool     simulation_mode    = false;       // skips actual Modbus writes when true
+
+    // Modbus TCP server: cached init-only fields (require restart to take effect)
+    bool     modbus_server_enabled   = false;
+    uint16_t modbus_server_port      = 502;
+    uint8_t  modbus_server_unit_id   = 3;    // 0 = accept any unit id
+    uint32_t modbus_server_watchdog_ms = 60000;  // 0 disables
+
+    // Modbus TCP server: runtime
+    TFModbusTCPServer modbus_server{TFModbusTCPByteOrder::Host};
+    bool     modbus_server_running   = false;
+    uint64_t modbus_server_tick_task_id = 0;
+
+    // Sticky OpMod (40236) latched between writes. 2424 = Default/Normal (P loop).
+    // 2289 = Battery charging (force-charge). 2290 = Battery discharging.
+    uint16_t modbus_op_mod           = 2424;
+
+    // Non-zero -> bypass the P controller and command this value directly
+    // (positive = discharge, negative = charge). Cleared by the watchdog,
+    // operator takeover, or a 2424 OpMod write.
+    int32_t  modbus_force_w          = 0;
+
+    // True while a Modbus client is the most recent source of truth.
+    bool     modbus_active           = false;
+    micros_t last_modbus_write_us    = -1_us;
 
     // --- runtime ---
     uint64_t tick_task_id       = 0;
