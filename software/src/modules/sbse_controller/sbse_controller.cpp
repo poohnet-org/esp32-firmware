@@ -153,14 +153,12 @@ void SbseController::pre_setup()
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},  // 0 disables
         {"simulation_mode",  Config::Bool(false)},
-    }), [this](Config &cfg, ConfigSource /*source*/) -> String {
-        const int32_t target = cfg.get("target_grid_w")->asInt();
-        const int32_t max_c  = static_cast<int32_t>(cfg.get("max_charge_w")->asUint());
-        const int32_t max_d  = static_cast<int32_t>(cfg.get("max_discharge_w")->asUint());
-
-        if (target < -max_d || target > max_c) {
-            return "target_grid_w must be within [-max_discharge_w, +max_charge_w]";
-        }
+    }), [](Config &cfg, ConfigSource /*source*/) -> String {
+        // target_grid_w is a setpoint (a desired value), max_charge_w /
+        // max_discharge_w are actuator saturation limits. They're orthogonal:
+        // an "unreachable" target (e.g. +1000 W with max_charge_w = 100) is
+        // not invalid -- the controller just saturates at the limit and the
+        // grid balances wherever it ends up.
         if (cfg.get("soc_interval_ms")->asUint() < cfg.get("tick_ms")->asUint()) {
             return "soc_interval_ms must be >= tick_ms";
         }
@@ -185,14 +183,10 @@ void SbseController::pre_setup()
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
         {"simulation_mode",  Config::Bool(false)},
-    }), [](Config &cfg, ConfigSource /*source*/) -> String {
-        const int32_t target = cfg.get("target_grid_w")->asInt();
-        const int32_t max_c  = static_cast<int32_t>(cfg.get("max_charge_w")->asUint());
-        const int32_t max_d  = static_cast<int32_t>(cfg.get("max_discharge_w")->asUint());
-
-        if (target < -max_d || target > max_c) {
-            return "target_grid_w must be within [-max_discharge_w, +max_charge_w]";
-        }
+    }), [](Config & /*cfg*/, ConfigSource /*source*/) -> String {
+        // No cross-field constraints. target_grid_w is a setpoint;
+        // max_charge_w / max_discharge_w are saturation limits. Per-field
+        // range constraints are enforced by the Config types themselves.
         return "";
     }};
 

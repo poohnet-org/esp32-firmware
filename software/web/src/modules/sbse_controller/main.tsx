@@ -218,24 +218,10 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
     };
 
     apply_field = (field: LiveField, value: number) => {
-        const current = API.get("sbse_controller/active_config");
-        const next: API.getType["sbse_controller/active_config"] = { ...current, [field]: value };
-
-        // Tightening max_charge_w / max_discharge_w can leave the existing
-        // target_grid_w outside the new [-max_discharge_w, +max_charge_w]
-        // window. The backend validator (correctly) rejects that inconsistent
-        // state, so clamp target_grid_w into the new window as part of the
-        // same PUT and snap the pending slider value to match.
-        if (field === "max_charge_w" || field === "max_discharge_w") {
-            const max_d = next.max_discharge_w;
-            const max_c = next.max_charge_w;
-            const clamped = Math.max(-max_d, Math.min(max_c, next.target_grid_w));
-            if (clamped !== next.target_grid_w) {
-                next.target_grid_w = clamped;
-                this.set_pending("target_grid_w", clamped);
-            }
-        }
-
+        // target_grid_w is a setpoint (a wish), max_charge_w / max_discharge_w
+        // are saturation limits. They are independent; the controller will
+        // saturate at the limits when the target can't physically be reached.
+        const next = { ...API.get("sbse_controller/active_config"), [field]: value };
         API.save("sbse_controller/active_config", next,
                  () => __("sbse_controller.script.save_active_failed"));
     };
@@ -314,8 +300,8 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                         <LiveSliderRow
                             label={__("sbse_controller.status.target_grid_w")}
                             help={__("sbse_controller.status.target_grid_w_help")}
-                            min={-Math.abs(ac.max_discharge_w || 5000)}
-                            max={Math.abs(ac.max_charge_w || 5000)}
+                            min={-10000}
+                            max={10000}
                             step={50}
                             pending={this.state.pending.target_grid_w}
                             current={ac.target_grid_w}
