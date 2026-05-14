@@ -46,3 +46,6 @@ export interface state {
 
 export interface force_release {
 }
+
+export interface resume {
+}

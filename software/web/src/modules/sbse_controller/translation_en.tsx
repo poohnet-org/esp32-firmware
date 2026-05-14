@@ -15,8 +15,13 @@ let x = {
             "write_errors": "Write errors",
             "target_grid_w": "Target net grid",
             "target_grid_w_help": <>Positive = import from grid. Negative = export to grid. Live update, not persisted to flash.</>,
+            "max_charge_w":  "Max charge power",
+            "max_charge_w_help":  <>Upper bound on battery charging power. Live update, not persisted to flash. <code>0</code> disables charging.</>,
+            "max_discharge_w": "Max discharge power",
+            "max_discharge_w_help": <>Upper bound on battery discharging power. Live update, not persisted to flash. <code>0</code> disables discharging.</>,
             "apply": "Apply",
             "force_release": "Pause 30 s (0 W)",
+            "resume":        "Resume",
             "sim_badge": "SIM",
 
             "mode_disabled":      "disabled",
@@ -96,7 +101,8 @@ let x = {
         "script": {
             "save_failed":          "Failed to save the SBSE controller settings",
             "save_active_failed":   "Failed to apply the live override",
-            "force_release_failed": "Failed to trigger force_release"
+            "force_release_failed": "Failed to trigger force_release",
+            "resume_failed":        "Failed to resume the controller"
         }
     }
 }
