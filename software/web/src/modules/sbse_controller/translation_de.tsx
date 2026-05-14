@@ -17,6 +17,7 @@ let x = {
             "target_grid_w_help": <>Positiv = Netzbezug. Negativ = Einspeisung. Sofortige Übernahme ohne Flash-Schreibvorgang.</>,
             "apply": "Übernehmen",
             "force_release": "30 s pausieren (0 W)",
+            "sim_badge": "SIM",
 
             "mode_disabled":      "deaktiviert",
             "mode_not_connected": "nicht verbunden",
@@ -39,10 +40,15 @@ let x = {
             "title": "SBSE 5.0 Regler",
 
             "section_connection": "Verbindung",
+            "section_mode":       "Betriebsmodus",
             "section_timing":     "Regelzyklus",
             "section_targets":    "Sollwerte",
             "section_tuning":     "Reglerparameter",
             "section_safety":     "Sicherheit",
+
+            "simulation_mode":      "Simulationsmodus",
+            "simulation_mode_desc": "Regler laufen lassen, ohne in den Wechselrichter zu schreiben",
+            "simulation_mode_help": <>Wenn aktiviert, liest und berechnet der Regler weiterhin Netz/Batterie/SoC und Sollwerte wie im Normalbetrieb, überspringt aber den eigentlichen Modbus-Schreibvorgang. Nützlich, um die Reglerparameter zu prüfen, bevor die Batterie tatsächlich angesteuert wird. Das Live-Diagramm, der Statuszustand und die Totband-Logik verhalten sich, als wären die Schreibvorgänge erfolgt.</>,
 
             "enabled":         "Aktiviert",
             "enabled_desc":    "Sollwertregler ausführen",

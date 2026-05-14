@@ -151,6 +151,7 @@ void SbseController::pre_setup()
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},  // 0 disables
+        {"simulation_mode",  Config::Bool(false)},
     }), [this](Config &cfg, ConfigSource /*source*/) -> String {
         const int32_t target = cfg.get("target_grid_w")->asInt();
         const int32_t max_c  = static_cast<int32_t>(cfg.get("max_charge_w")->asUint());
@@ -181,6 +182,7 @@ void SbseController::pre_setup()
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
+        {"simulation_mode",  Config::Bool(false)},
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
         const int32_t target = cfg.get("target_grid_w")->asInt();
         const int32_t max_c  = static_cast<int32_t>(cfg.get("max_charge_w")->asUint());
@@ -203,6 +205,7 @@ void SbseController::pre_setup()
         {"write_ok_count",    Config::Uint32(0)},
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
+        {"simulation_mode",   Config::Bool(false)},
         {"last_error",        Config::Str("", 0, 64)},
     });
 }
@@ -241,6 +244,7 @@ void SbseController::copy_live_tunable_to_active()
     active_config.get("alpha_setpoint_milli")   ->updateUint(config.get("alpha_setpoint_milli") ->asUint());
     active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
     active_config.get("safety_zero_after_failures")->updateUint(config.get("safety_zero_after_failures")->asUint());
+    active_config.get("simulation_mode")        ->updateBool(config.get("simulation_mode")      ->asBool());
 }
 
 void SbseController::apply_runtime_from_active()
@@ -254,6 +258,9 @@ void SbseController::apply_runtime_from_active()
     alpha_setpoint  = static_cast<float>(active_config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
+    simulation_mode = active_config.get("simulation_mode")->asBool();
+
+    state.get("simulation_mode")->updateBool(simulation_mode);
 }
 
 void SbseController::register_urls()
@@ -568,6 +575,20 @@ void SbseController::compute_and_write()
 
 void SbseController::send_setpoint(int32_t watts)
 {
+    if (simulation_mode) {
+        // Skip the Modbus write but mirror every state change a real
+        // successful write would have produced, so the deadband logic, the
+        // dashboard counters, and the live chart all behave as if the write
+        // had gone out.
+        last_written_w = watts;
+        last_write_ok  = now_us();
+        ++write_ok_count;
+        state.get("write_ok_count")->updateUint(write_ok_count);
+        publish_setpoint(watts);
+        finish_cycle(Mode::Running);
+        return;
+    }
+
     write_int32be(buf_setpoint + 0, watts);
     write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
 
@@ -616,7 +637,10 @@ void SbseController::send_release()
     // or the operator switches the inverter back to internal control. Used
     // by `force_release` (operator-driven pause) and `pre_reboot` (so we
     // don't leave a stale active setpoint commanding the battery).
-    if (connected_client == nullptr) {
+    //
+    // In simulation mode we skip the actual write but the operator-visible
+    // pause behaviour (handled in the caller) is unaffected.
+    if (connected_client == nullptr || simulation_mode) {
         return;
     }
 
@@ -677,6 +701,16 @@ void SbseController::cycle_failed(const char *where,
 
 void SbseController::send_safety_zero()
 {
+    if (simulation_mode) {
+        last_written_w = 0;
+        last_write_ok  = now_us();
+        ++write_ok_count;
+        state.get("write_ok_count")->updateUint(write_ok_count);
+        publish_setpoint(0);
+        finish_cycle(Mode::Safety);
+        return;
+    }
+
     write_int32be(buf_setpoint + 0, 0);
     write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
 

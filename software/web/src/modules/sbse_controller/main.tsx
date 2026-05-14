@@ -183,7 +183,15 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                 <div class="card sbse-card mb-3">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
-                        <ModeBadge mode={st.mode}/>
+                        <div class="d-flex align-items-center gap-2">
+                            {st.simulation_mode ?
+                                <span class="badge bg-info sbse-mode-pill">
+                                    <AlertTriangle size={14}/>
+                                    <span class="ms-1">{__("sbse_controller.status.sim_badge")}</span>
+                                </span>
+                            : null}
+                            <ModeBadge mode={st.mode}/>
+                        </div>
                     </div>
                     <div class="card-body">
 
@@ -400,6 +408,15 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                         <InputNumber min={1} max={65535} value={state.port} onValue={this.set("port")}/>
                     </FormRow>
 
+                    <FormSeparator heading={__("sbse_controller.content.section_mode")}/>
+
+                    <FormRow label={__("sbse_controller.content.simulation_mode")}
+                             help={__("sbse_controller.content.simulation_mode_help")}>
+                        <Switch desc={__("sbse_controller.content.simulation_mode_desc")}
+                                checked={state.simulation_mode}
+                                onClick={this.toggle("simulation_mode")}/>
+                    </FormRow>
+
                     <FormSeparator heading={__("sbse_controller.content.section_timing")}/>
 
                     <FormRow label={__("sbse_controller.content.tick_ms")}
@@ -507,38 +524,40 @@ function build_status(): StatusResult | null {
         return null;
     }
 
+    const sim_suffix = st.simulation_mode ? ` (${__("sbse_controller.status.sim_badge")})` : "";
+
     switch (st.mode) {
         case "disabled":
             return {
                 status: ModuleStatus.Disabled,
-                text:   () => mode_label(st.mode),
+                text:   () => mode_label(st.mode) + sim_suffix,
             };
         case "running":
             return {
-                status: ModuleStatus.Ok,
-                text:   () => `${fmt_w(st.grid_w_ema)} W → ${fmt_w(ac.target_grid_w)} W`,
+                status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
+                text:   () => `${fmt_w(st.grid_w_ema)} W → ${fmt_w(ac.target_grid_w)} W` + sim_suffix,
             };
         case "stale":
         case "paused":
         case "not_connected":
             return {
                 status: ModuleStatus.Warning,
-                text:   () => st.last_error && st.last_error.length > 0
+                text:   () => (st.last_error && st.last_error.length > 0
                               ? st.last_error
-                              : mode_label(st.mode),
+                              : mode_label(st.mode)) + sim_suffix,
             };
         case "safety":
         case "faulted":
             return {
                 status: ModuleStatus.Error,
-                text:   () => st.last_error && st.last_error.length > 0
+                text:   () => (st.last_error && st.last_error.length > 0
                               ? st.last_error
-                              : mode_label(st.mode),
+                              : mode_label(st.mode)) + sim_suffix,
             };
         default:
             return {
                 status: ModuleStatus.Warning,
-                text:   () => mode_label(st.mode),
+                text:   () => mode_label(st.mode) + sim_suffix,
             };
     }
 }
