@@ -14,10 +14,10 @@
 
 import * as util from "../../ts/util";
 import * as API from "../../ts/api";
-import { h, Fragment, Component, createRef, RefObject } from "preact";
+import { h, Fragment, Component, createRef, RefObject, ComponentChildren } from "preact";
 import { __ } from "../../ts/translation";
 import { Button } from "react-bootstrap";
-import { Activity, AlertTriangle, Battery, BatteryCharging, Pause, Sliders, Wifi, WifiOff, Zap } from "react-feather";
+import { Activity, AlertTriangle, Battery, BatteryCharging, Pause, Play, Sliders, Wifi, WifiOff, Zap } from "react-feather";
 
 import { ConfigComponent } from "../../ts/components/config_component";
 import { ConfigForm } from "../../ts/components/config_form";
@@ -107,6 +107,41 @@ function fmt_age_ms(ms: number): string {
     return `${util.toLocaleFixed(ms / 60_000, 1)} min`;
 }
 
+function LiveSliderRow(props: {
+    label: string,
+    help?: ComponentChildren,
+    min: number,
+    max: number,
+    step: number,
+    pending: number,
+    current: number,
+    onValue: (v: number) => void,
+    onApply: () => void,
+}) {
+    return (
+        <FormRow label={props.label} help={props.help}>
+            <div class="d-flex gap-2 align-items-center">
+                <input type="range"
+                       class="form-range sbse-slider"
+                       min={props.min} max={props.max} step={props.step}
+                       value={props.pending}
+                       onInput={(e) => props.onValue(parseInt((e.target as HTMLInputElement).value, 10))}/>
+                <div style="min-width: 9em;">
+                    <InputNumber unit="W"
+                                 min={props.min} max={props.max}
+                                 value={props.pending}
+                                 onValue={props.onValue}/>
+                </div>
+                <Button variant="primary"
+                        disabled={props.pending === props.current}
+                        onClick={props.onApply}>
+                    {__("sbse_controller.status.apply")}
+                </Button>
+            </div>
+        </FormRow>
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Navbar entry
 // ---------------------------------------------------------------------------
@@ -121,18 +156,39 @@ export function SbseControllerNavbar() {
 // Status section (dashboard card)
 // ---------------------------------------------------------------------------
 
+// Live-tunable fields the dashboard exposes as slider+input+apply rows.
+type LiveField = "target_grid_w" | "max_charge_w" | "max_discharge_w";
+
+interface Pending {
+    target_grid_w:   number;
+    max_charge_w:    number;
+    max_discharge_w: number;
+}
+
 interface SbseControllerStatusState {
-    target_input: number;          // pending value in the slider/input
+    pending: Pending;              // pending values for the slider/input rows
     samples: Sample[];             // sliding-window buffer for the live trace
+}
+
+function snapshot_pending(): Pending {
+    const ac = API.get("sbse_controller/active_config");
+    return {
+        target_grid_w:   ac.target_grid_w,
+        max_charge_w:    ac.max_charge_w,
+        max_discharge_w: ac.max_discharge_w,
+    };
 }
 
 export class SbseControllerStatus extends Component<{}, SbseControllerStatusState> {
     constructor() {
         super();
-        this.state = { target_input: 0, samples: [] };
+        this.state = {
+            pending: { target_grid_w: 0, max_charge_w: 5000, max_discharge_w: 5000 },
+            samples: [],
+        };
 
         util.addApiEventListener("sbse_controller/active_config", () => {
-            this.setState({target_input: API.get("sbse_controller/active_config").target_grid_w});
+            this.setState({ pending: snapshot_pending() });
         });
 
         util.addApiEventListener("sbse_controller/state", () => {
@@ -157,15 +213,41 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
         });
     }
 
-    apply_target = (watts: number) => {
-        const ac = {...API.get("sbse_controller/active_config"), target_grid_w: watts};
-        API.save("sbse_controller/active_config", ac,
+    set_pending = (field: LiveField, value: number) => {
+        this.setState({ pending: { ...this.state.pending, [field]: value } });
+    };
+
+    apply_field = (field: LiveField, value: number) => {
+        const current = API.get("sbse_controller/active_config");
+        const next: API.getType["sbse_controller/active_config"] = { ...current, [field]: value };
+
+        // Tightening max_charge_w / max_discharge_w can leave the existing
+        // target_grid_w outside the new [-max_discharge_w, +max_charge_w]
+        // window. The backend validator (correctly) rejects that inconsistent
+        // state, so clamp target_grid_w into the new window as part of the
+        // same PUT and snap the pending slider value to match.
+        if (field === "max_charge_w" || field === "max_discharge_w") {
+            const max_d = next.max_discharge_w;
+            const max_c = next.max_charge_w;
+            const clamped = Math.max(-max_d, Math.min(max_c, next.target_grid_w));
+            if (clamped !== next.target_grid_w) {
+                next.target_grid_w = clamped;
+                this.set_pending("target_grid_w", clamped);
+            }
+        }
+
+        API.save("sbse_controller/active_config", next,
                  () => __("sbse_controller.script.save_active_failed"));
     };
 
     force_release = () => {
         API.call("sbse_controller/force_release", null,
                  () => __("sbse_controller.script.force_release_failed"));
+    };
+
+    resume = () => {
+        API.call("sbse_controller/resume", null,
+                 () => __("sbse_controller.script.resume_failed"));
     };
 
     render() {
@@ -229,35 +311,51 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
 
                         <hr/>
 
-                        <FormRow label={__("sbse_controller.status.target_grid_w")}
-                                 help={__("sbse_controller.status.target_grid_w_help")}>
-                            <div class="d-flex gap-2 align-items-center">
-                                <input type="range"
-                                       class="form-range sbse-slider"
-                                       min={-Math.abs(ac.max_discharge_w || 5000)}
-                                       max={Math.abs(ac.max_charge_w || 5000)}
-                                       step={50}
-                                       value={this.state.target_input}
-                                       onInput={(e) => this.setState({target_input: parseInt((e.target as HTMLInputElement).value, 10)})}/>
-                                <div style="min-width: 9em;">
-                                    <InputNumber unit="W"
-                                                 min={-Math.abs(ac.max_discharge_w || 5000)}
-                                                 max={Math.abs(ac.max_charge_w || 5000)}
-                                                 value={this.state.target_input}
-                                                 onValue={(v) => this.setState({target_input: v})}/>
-                                </div>
-                                <Button variant="primary"
-                                        disabled={this.state.target_input === ac.target_grid_w}
-                                        onClick={() => this.apply_target(this.state.target_input)}>
-                                    {__("sbse_controller.status.apply")}
-                                </Button>
-                            </div>
-                        </FormRow>
+                        <LiveSliderRow
+                            label={__("sbse_controller.status.target_grid_w")}
+                            help={__("sbse_controller.status.target_grid_w_help")}
+                            min={-Math.abs(ac.max_discharge_w || 5000)}
+                            max={Math.abs(ac.max_charge_w || 5000)}
+                            step={50}
+                            pending={this.state.pending.target_grid_w}
+                            current={ac.target_grid_w}
+                            onValue={(v) => this.set_pending("target_grid_w", v)}
+                            onApply={() => this.apply_field("target_grid_w", this.state.pending.target_grid_w)}/>
 
-                        <div class="d-flex justify-content-end mt-3">
-                            <Button variant="outline-warning" onClick={this.force_release}>
+                        <LiveSliderRow
+                            label={__("sbse_controller.status.max_charge_w")}
+                            help={__("sbse_controller.status.max_charge_w_help")}
+                            min={0}
+                            max={10000}
+                            step={50}
+                            pending={this.state.pending.max_charge_w}
+                            current={ac.max_charge_w}
+                            onValue={(v) => this.set_pending("max_charge_w", v)}
+                            onApply={() => this.apply_field("max_charge_w", this.state.pending.max_charge_w)}/>
+
+                        <LiveSliderRow
+                            label={__("sbse_controller.status.max_discharge_w")}
+                            help={__("sbse_controller.status.max_discharge_w_help")}
+                            min={0}
+                            max={10000}
+                            step={50}
+                            pending={this.state.pending.max_discharge_w}
+                            current={ac.max_discharge_w}
+                            onValue={(v) => this.set_pending("max_discharge_w", v)}
+                            onApply={() => this.apply_field("max_discharge_w", this.state.pending.max_discharge_w)}/>
+
+                        <div class="d-flex justify-content-end gap-2 mt-3">
+                            <Button variant="outline-warning"
+                                    disabled={st.mode === "paused"}
+                                    onClick={this.force_release}>
                                 <Pause size={16} class="me-1"/>
                                 {__("sbse_controller.status.force_release")}
+                            </Button>
+                            <Button variant="outline-success"
+                                    disabled={st.mode !== "paused"}
+                                    onClick={this.resume}>
+                                <Play size={16} class="me-1"/>
+                                {__("sbse_controller.status.resume")}
                             </Button>
                         </div>
 

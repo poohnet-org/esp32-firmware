@@ -302,6 +302,27 @@ void SbseController::register_urls()
         logger.printfln("force_release: pausing setpoint loop for %lld s",
                         static_cast<long long>(FORCE_RELEASE_HOLD.to<seconds_t>().t));
     }, true);
+
+    api.addCommand("sbse_controller/resume", Config::Null(), {},
+                   [this](Language /*language*/, String &/*errmsg*/) {
+        if (!paused) {
+            return;
+        }
+        paused       = false;
+        paused_until = -1_us;
+
+        // Publish a plausible mode immediately so the dashboard doesn't sit on
+        // "paused" until the next tick fires. The tick will correct it if
+        // anything is off (e.g. read failure -> stale).
+        if (!enabled) {
+            publish_mode(Mode::Disabled);
+        } else if (connected_client == nullptr) {
+            publish_mode(Mode::NotConnected);
+        } else {
+            publish_mode(Mode::Stale);
+        }
+        logger.printfln("resume: ending pause early");
+    }, true);
 }
 
 void SbseController::register_events()
