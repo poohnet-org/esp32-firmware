@@ -27,6 +27,7 @@ GET → modify → PUT.
 | `modbus_server_port` | `502` | uint16 | Port the SMA-compatible server listens on. Requires a reboot to take effect. |
 | `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `0` means "accept any". Live-tunable (no reboot needed). |
 | `modbus_server_watchdog_s` | `60` | seconds, 0…3600 | Watchdog timeout. If no Modbus write arrives within this many seconds, the controller reverts the live overrides to the persistent config and exits force-mode. `0` disables the watchdog. Live-tunable. |
+| `modbus_server_use_grid_spt` | `false` | bool | When `false` (default), Modbus writes to register 40793 leave `target_grid_w` alone -- only `max_charge_w` and `max_discharge_w` are updated. This matches the WARP charger's behaviour (it always sends `GridWSpt = 0` regardless of mode). Set to `true` for Modbus clients that genuinely steer the grid setpoint. Live-tunable. |
 
 ## Live-tunable fields (in both `config` and `active_config`)
 
@@ -90,11 +91,25 @@ The latest `OpMod` value (sticky between writes) is interpreted on every `40793`
 
 | OpMod | Effect on the SBSE controller |
 |---|---|
-| `2424` (Default/Normal/Block/Block-Charge/Block-Discharge) | P controller stays in charge. `BatChaMaxW` → `active_config.max_charge_w`, `BatDchgMaxW` → `active_config.max_discharge_w`, `GridWSpt` → `active_config.target_grid_w`. Force-mode is cleared. |
+| `2424` (Default/Normal/Block/Block-Charge/Block-Discharge) | P controller stays in charge. `BatChaMaxW` → `active_config.max_charge_w`, `BatDchgMaxW` → `active_config.max_discharge_w`. `GridWSpt` → `active_config.target_grid_w` **only if `modbus_server_use_grid_spt = true`** (off by default — see below). Force-mode is cleared. |
 | `2289` (Battery charging) | **Force charge.** P controller bypassed. Battery commanded at `−BatChaMaxW` W (charging). Mode reports `force_charge`. EMA on the setpoint, deadband, SoC clamps and `max_*` still apply on the output. |
 | `2290` (Battery discharging) | **Force discharge.** P controller bypassed. Battery commanded at `+BatDchgMaxW` W (discharging). Mode reports `force_discharge`. Same output filters as above. |
 
 Each `40793` write is mirrored into `active_config` immediately (visible at `GET /sbse_controller/active_config` and on the dashboard's sliders).
+
+### GridWSpt handling (`modbus_server_use_grid_spt`)
+
+The WARP charger's "SMA Hybrid Inverter" battery class always writes `GridWSpt = 0` regardless of the chosen mode. Mirroring that verbatim into `active_config.target_grid_w` would zero out the operator's configured target on every mode change — almost certainly not what you want. The default `modbus_server_use_grid_spt = false` therefore ignores `GridWSpt` entirely; only `BatChaMaxW` / `BatDchgMaxW` and the `OpMod`-driven force-mode bits take effect. Switch the option on if you have a Modbus client that genuinely uses `GridWSpt` as a setpoint.
+
+### Inverter feed-in limit caveat
+
+The SBSE has a hard grid-feed-in limit configured directly on the inverter (e.g. 70 % of nameplate PV power, depending on grid-code rules). When PV instantaneously produces **more** than this limit, the inverter charges the battery from the excess **regardless of the 0 W setpoint we command**. This affects:
+
+- "Block" mode (both caps zero) → battery still charges from PV that can't be exported.
+- "Block Charge" mode → same.
+- The `force_release` / "Pause 30 s" button → same.
+
+In other words: while PV output is within the inverter's permitted feed-in range, a 0 W setpoint really idles the battery. Above that range, the battery absorbs the otherwise-curtailed PV no matter what the SBSE controller says. There is no fix at the controller level; raise the inverter's feed-in limit or accept the behaviour.
 
 ### Arbitration
 
