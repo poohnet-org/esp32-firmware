@@ -28,7 +28,6 @@
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 #include "tools/net.h"
-#include "tools/string_builder.h"
 
 #include "gcc_warnings.h"
 
@@ -78,51 +77,18 @@ static constexpr micros_t MODBUS_TIMEOUT             = 2_s;
 static constexpr micros_t FORCE_RELEASE_HOLD         = 30_s;
 
 // ---------------------------------------------------------------------------
-// SMA-compatible Modbus TCP server (incoming external control)
+// SMA OpMod values latched into modbus_op_mod and consulted from the setpoint
+// dispatch handler. The wire-level protocol (register addresses + lengths,
+// listener lifecycle) lives in SbseModbusServer.
 //
-// The wire protocol matches the registers the WARP charger's
-// `batteries_modbus_tcp` SMA Hybrid Inverter battery class writes to a real
-// SMA Sunny Boy Storage. We accept the same WriteMultipleRegisters traffic so
-// a WARP charger configured for "SMA Hybrid Inverter" steering can target the
-// SBSE controller's IP and have it Do The Right Thing.
-//
-//   40236 (2 reg, U32BE)  CmpBMS.OpMod
-//                           2424 = Default/Normal  -> P-controller in charge
-//                           2289 = Battery charging -> force charge
-//                           2290 = Battery discharging -> force discharge
-//
-//   40793 (10 reg, 5 x U32BE)  CmpBMS.XYZ
-//     [0]  BatChaMinW   - Min battery charging power [W]
-//     [1]  BatChaMaxW   - Max battery charging power [W]
-//     [2]  BatDchgMinW  - Min battery discharging power [W]
-//     [3]  BatDchgMaxW  - Max battery discharging power [W]
-//     [4]  GridWSpt     - Grid transfer power setpoint [W, signed via U32]
+//   2424 = Default     -> P-controller in charge (with whatever caps are set)
+//   2289 = Battery charging   -> force charge at the BatChaMax value
+//   2290 = Battery discharging-> force discharge at the BatDchgMax value
 // ---------------------------------------------------------------------------
-
-static constexpr uint16_t MODBUS_SRV_OPMOD_ADDR       = 40236;
-static constexpr uint16_t MODBUS_SRV_OPMOD_REG_COUNT  = 2;
-static constexpr uint16_t MODBUS_SRV_SETP_ADDR        = 40793;
-static constexpr uint16_t MODBUS_SRV_SETP_REG_COUNT   = 10;
 
 static constexpr uint16_t SMA_OPMOD_DEFAULT           = 2424;
 static constexpr uint16_t SMA_OPMOD_FORCE_CHARGE      = 2289;
 static constexpr uint16_t SMA_OPMOD_FORCE_DISCHARGE   = 2290;
-
-// Server tick cadence. The TFModbusTCPServer drives I/O from this; lower =
-// snappier response, higher = less scheduler churn. 20 ms is plenty for a
-// device that sees <1 write/s in normal use.
-static constexpr millis_t MODBUS_SRV_TICK             = 20_ms;
-
-// 5-min live-trace ring buffer (see HistorySample / HISTORY_CAPACITY).
-// One sample per second; the dashboard reads the whole buffer on page load.
-static constexpr micros_t HISTORY_INTERVAL            = 1_s;
-
-static int16_t sat16(int32_t v)
-{
-    if (v > INT16_MAX) return INT16_MAX;
-    if (v < INT16_MIN) return INT16_MIN;
-    return static_cast<int16_t>(v);
-}
 
 // ---------------------------------------------------------------------------
 
@@ -351,18 +317,20 @@ void SbseController::register_urls()
         copy_live_tunable_to_active();
         apply_runtime_from_active();
 
-        // Refresh Modbus server config and bounce the listener if the relevant
-        // fields changed. Cheap (server.start binds 0.0.0.0:port once); always
-        // restart even on no-op for simplicity.
-        bool was_enabled = modbus_server_running;
-        uint16_t was_port = modbus_server_port;
+        // Refresh Modbus server config. Bounce the listener only if the
+        // bind-time fields (enabled / port) actually changed; the rest
+        // (unit_id, watchdog, use_grid_spt) are consulted live and don't
+        // require a restart.
         modbus_server_enabled       = config.get("modbus_server_enabled")->asBool();
         modbus_server_port          = config.get("modbus_server_port")->asUint16();
         modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
         modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
         modbus_server_use_grid_spt  = config.get("modbus_server_use_grid_spt")->asBool();
-        if (modbus_server_enabled != was_enabled || modbus_server_port != was_port) {
-            restart_modbus_server();
+        if (modbus_server.needs_restart_for(modbus_server_enabled, modbus_server_port)) {
+            modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
+            modbus_server.restart();
+        } else {
+            modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
         }
     }, false);
 
@@ -389,19 +357,10 @@ void SbseController::register_urls()
 
     api.addState("sbse_controller/state", &state);
 
-    // Live-trace ring buffer: returns the last ~5 minutes of (grid, battery,
-    // setpoint, target) sampled at 1 Hz, so a freshly-loaded dashboard can
-    // seed its chart instead of starting from a blank canvas.
-    server.on("/sbse_controller/history", HTTP_GET, [this](WebServerRequest request) {
-        StringBuilder sb;
-        // Worst-case per sample: "[9999999,-32768,-32768,-32768,-32768],"
-        // = ~43 bytes. 300 * 50 + 20 outer = ~15 kB.
-        if (!sb.setCapacity(HISTORY_CAPACITY * 50 + 64)) {
-            return request.send_plain(500, "history alloc failed");
-        }
-        this->format_history(now_us(), &sb);
-        return request.send_json(200, sb);
-    });
+    // Live-trace ring buffer: GET returns the last ~5 minutes of
+    // (grid, battery, setpoint, target) sampled at 1 Hz, so a freshly-loaded
+    // dashboard can seed its chart instead of starting from a blank canvas.
+    trace_history.register_url("/sbse_controller/history");
 
     api.addCommand("sbse_controller/force_release", Config::Null(), {},
                    [this](Language /*language*/, String &/*errmsg*/) {
@@ -466,8 +425,18 @@ void SbseController::register_events()
         this->tick();
     }, tick_ms, tick_ms);
 
+    // Wire the SMA Modbus server's protocol-adapter callbacks once, then
+    // start if enabled.
+    modbus_server.set_handlers(
+        [this](uint32_t op_mod) {
+            return this->on_modbus_op_mod_write(op_mod);
+        },
+        [this](const uint16_t *regs10) {
+            return this->on_modbus_setpoint_write(regs10);
+        });
+    modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
     if (modbus_server_enabled) {
-        start_modbus_server();
+        modbus_server.start();
     }
 }
 
@@ -478,7 +447,7 @@ void SbseController::pre_reboot()
         tick_task_id = 0;
     }
 
-    stop_modbus_server();
+    modbus_server.stop();
 
     // Best-effort 0 W write so the inverter isn't left holding a stale
     // active setpoint across our reboot. Fire-and-forget; the connection
@@ -744,7 +713,7 @@ void SbseController::compute_and_write()
     state.get("battery_w") ->updateInt(battery_w_raw);
     state.get("battery_soc")->updateUint(soc_pct);
 
-    maybe_capture_history();
+    trace_history.add_sample(lroundf(ema_grid_w), battery_w_raw, last_written_w, target_grid_w);
 
     // 7) Deadband. If the new target is within deadband of the last write,
     //    skip the write -- the SBSE holds the last commanded setpoint
@@ -975,118 +944,38 @@ SbseController::Mode SbseController::current_running_mode() const
 }
 
 // ---------------------------------------------------------------------------
-// SMA-compatible Modbus TCP server
+// SMA Modbus server handlers
+//
+// These are the protocol-layer callbacks SbseModbusServer invokes on each
+// accepted WriteMultipleRegisters. The server has already validated the
+// unit-id filter and the address/length tuple; here we carry the semantic
+// state (sticky OpMod, force-mode, active_config wiring, watchdog timer).
 // ---------------------------------------------------------------------------
 
-void SbseController::start_modbus_server()
+TFModbusTCPExceptionCode SbseController::on_modbus_op_mod_write(uint32_t op_mod)
 {
-    if (modbus_server_running || !modbus_server_enabled) {
-        return;
+    // 40236: CmpBMS.OpMod (U32BE). Latch for the next 40793 write. We accept
+    // the three documented SMA values (2289/2290/2424); anything else is
+    // treated as "Default" so a buggy client can't trap us in a force-mode
+    // we can't get out of without a reboot.
+    if (op_mod == SMA_OPMOD_FORCE_CHARGE
+        || op_mod == SMA_OPMOD_FORCE_DISCHARGE
+        || op_mod == SMA_OPMOD_DEFAULT) {
+        modbus_op_mod = static_cast<uint16_t>(op_mod);
+    } else {
+        modbus_op_mod = SMA_OPMOD_DEFAULT;
     }
-
-    const bool ok = modbus_server.start(
-        0, modbus_server_port,
-        [](uint32_t peer_address, uint16_t peer_port) {
-            char peer_str[INET_ADDRSTRLEN];
-            tf_ip4addr_ntoa(&peer_address, peer_str, sizeof(peer_str));
-            logger.printfln("modbus server: client %s:%u connected", peer_str, peer_port);
-        },
-        [](uint32_t peer_address, uint16_t peer_port,
-           TFModbusTCPServerDisconnectReason reason, int error_number) {
-            char peer_str[INET_ADDRSTRLEN];
-            tf_ip4addr_ntoa(&peer_address, peer_str, sizeof(peer_str));
-            logger.printfln("modbus server: client %s:%u disconnected: %s (error %d)",
-                            peer_str, peer_port,
-                            get_tf_modbus_tcp_server_client_disconnect_reason_name(reason),
-                            error_number);
-        },
-        [this](uint8_t unit_id, TFModbusTCPFunctionCode function_code,
-               uint16_t start_address, uint16_t data_count, void *data_values) {
-            return this->dispatch_modbus(unit_id, function_code, start_address,
-                                         data_count, static_cast<const uint16_t *>(data_values));
-        });
-
-    if (!ok) {
-        logger.printfln("modbus server: failed to start on port %u", modbus_server_port);
-        return;
-    }
-
-    modbus_server_running = true;
-    modbus_server_tick_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
-        modbus_server.tick();
-    }, MODBUS_SRV_TICK, MODBUS_SRV_TICK);
-
-    logger.printfln("modbus server: listening on port %u, unit_id=%u, watchdog=%lus",
-                    modbus_server_port,
-                    static_cast<unsigned>(modbus_server_unit_id),
-                    modbus_server_watchdog_ms / 1000u);
+    state.get("modbus_op_mod")->updateUint(modbus_op_mod);
+    return TFModbusTCPExceptionCode::Success;
 }
 
-void SbseController::stop_modbus_server()
+TFModbusTCPExceptionCode SbseController::on_modbus_setpoint_write(const uint16_t *regs10)
 {
-    if (!modbus_server_running) {
-        return;
-    }
-
-    if (modbus_server_tick_task_id != 0) {
-        task_scheduler.cancel(modbus_server_tick_task_id);
-        modbus_server_tick_task_id = 0;
-    }
-    modbus_server.stop();
-    modbus_server_running = false;
-    logger.printfln("modbus server: stopped");
-}
-
-void SbseController::restart_modbus_server()
-{
-    stop_modbus_server();
-    if (modbus_server_enabled) {
-        start_modbus_server();
-    }
-}
-
-TFModbusTCPExceptionCode SbseController::dispatch_modbus(
-    uint8_t unit_id,
-    TFModbusTCPFunctionCode function_code,
-    uint16_t start_address,
-    uint16_t data_count,
-    const uint16_t *data_values)
-{
-    // Unit ID filter. 0 means "accept any unit" (broadcast-style).
-    if (modbus_server_unit_id != 0 && unit_id != modbus_server_unit_id) {
-        return TFModbusTCPExceptionCode::IllegalDataAddress;
-    }
-
-    // Only WriteMultipleRegisters at the two SMA register blocks is accepted.
-    // Everything else returns IllegalFunction / IllegalDataAddress so a
-    // confused client gets a clear error instead of silent acceptance.
-    if (function_code != TFModbusTCPFunctionCode::WriteMultipleRegisters) {
-        return TFModbusTCPExceptionCode::IllegalFunction;
-    }
-
-    if (start_address == MODBUS_SRV_OPMOD_ADDR && data_count == MODBUS_SRV_OPMOD_REG_COUNT) {
-        // 40236: CmpBMS.OpMod (U32BE). Latch for the next 40793 write. We
-        // accept the three documented SMA values (2289/2290/2424); anything
-        // else is treated as "Default" so a buggy client can't trap us in a
-        // force-mode we can't get out of without a reboot.
-        uint32_t op_mod = (static_cast<uint32_t>(data_values[0]) << 16) | data_values[1];
-        if (op_mod == SMA_OPMOD_FORCE_CHARGE
-            || op_mod == SMA_OPMOD_FORCE_DISCHARGE
-            || op_mod == SMA_OPMOD_DEFAULT) {
-            modbus_op_mod = static_cast<uint16_t>(op_mod);
-        } else {
-            modbus_op_mod = SMA_OPMOD_DEFAULT;
-        }
-        state.get("modbus_op_mod")->updateUint(modbus_op_mod);
-        return TFModbusTCPExceptionCode::Success;
-    }
-
-    if (start_address == MODBUS_SRV_SETP_ADDR && data_count == MODBUS_SRV_SETP_REG_COUNT) {
-        apply_modbus_setpoint_block(data_values);
-        return TFModbusTCPExceptionCode::Success;
-    }
-
-    return TFModbusTCPExceptionCode::IllegalDataAddress;
+    // 40793: 5 x U32BE -- handed off to the semantic layer which decodes
+    // the registers, applies the SMA OpMod interpretation, and mirrors
+    // values into active_config.
+    apply_modbus_setpoint_block(regs10);
+    return TFModbusTCPExceptionCode::Success;
 }
 
 void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
@@ -1171,52 +1060,3 @@ void SbseController::watchdog_tick()
     revert_modbus_overrides();
 }
 
-// ---------------------------------------------------------------------------
-// 5-minute live-trace ring buffer
-// ---------------------------------------------------------------------------
-
-void SbseController::maybe_capture_history()
-{
-    const micros_t now = now_us();
-    if (history_last_us != -1_us && (now - history_last_us) < HISTORY_INTERVAL) {
-        return;
-    }
-    history_last_us = now;
-
-    HistorySample &s = history_samples[history_head];
-    s.captured_us = now;
-    s.grid_w      = sat16(lroundf(ema_grid_w));
-    s.battery_w   = sat16(battery_w_raw);
-    s.setpoint_w  = sat16(last_written_w);
-    s.target_w    = sat16(target_grid_w);
-
-    history_head = (history_head + 1) % HISTORY_CAPACITY;
-    if (history_count < HISTORY_CAPACITY) {
-        ++history_count;
-    }
-}
-
-void SbseController::format_history(micros_t now, StringBuilder *sb) const
-{
-    // Wire format: {"samples": [[age_ms, grid, battery, setpoint, target], ...]}
-    // Samples are oldest -> newest. age_ms is computed at response time so the
-    // frontend can rebase against its own clock without depending on NTP sync
-    // between device and browser.
-    sb->puts("{\"samples\":[");
-    if (history_count > 0) {
-        const size_t start = (history_head + HISTORY_CAPACITY - history_count) % HISTORY_CAPACITY;
-        for (size_t i = 0; i < history_count; ++i) {
-            const size_t idx = (start + i) % HISTORY_CAPACITY;
-            const HistorySample &s = history_samples[idx];
-            const uint32_t age_ms = (now - s.captured_us).to<millis_t>().as<uint32_t>();
-            sb->printf("%s[%lu,%d,%d,%d,%d]",
-                       i == 0 ? "" : ",",
-                       age_ms,
-                       static_cast<int>(s.grid_w),
-                       static_cast<int>(s.battery_w),
-                       static_cast<int>(s.setpoint_w),
-                       static_cast<int>(s.target_w));
-        }
-    }
-    sb->puts("]}");
-}

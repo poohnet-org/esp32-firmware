@@ -23,12 +23,13 @@
 
 #include <TFModbusTCPClient.h>
 #include <TFModbusTCPClientPool.h>
-#include <TFModbusTCPServer.h>
 #include <TFTools/Micros.h>
 
 #include "config.h"
 #include "module.h"
 #include "modules/network_lib/generic_tcp_client_pool_connector.h"
+#include "sbse_modbus_server.h"
+#include "sbse_trace_history.h"
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -78,15 +79,11 @@ private:
     void send_release();
     void send_safety_zero();
 
-    // Modbus TCP server (external SMA-compatible control)
-    void start_modbus_server();
-    void stop_modbus_server();
-    void restart_modbus_server();
-    TFModbusTCPExceptionCode dispatch_modbus(uint8_t unit_id,
-                                             TFModbusTCPFunctionCode function_code,
-                                             uint16_t start_address,
-                                             uint16_t data_count,
-                                             const uint16_t *data_values);
+    // SMA Modbus TCP server -- the server class itself is just the protocol
+    // adapter; these methods carry the semantics (sticky OpMod, force-mode,
+    // active_config wiring, watchdog).
+    TFModbusTCPExceptionCode on_modbus_op_mod_write(uint32_t op_mod);
+    TFModbusTCPExceptionCode on_modbus_setpoint_write(const uint16_t *regs10);
     void apply_modbus_setpoint_block(const uint16_t *data_values);
     void revert_modbus_overrides();      // watchdog expiry / operator takeover
     void watchdog_tick();
@@ -129,17 +126,15 @@ private:
     uint32_t safety_zero_after_failures = 5;  // 0 disables the safety net
     bool     simulation_mode    = false;       // skips actual Modbus writes when true
 
-    // Modbus TCP server: cached init-only fields (require restart to take effect)
-    bool     modbus_server_enabled   = false;
-    uint16_t modbus_server_port      = 502;
-    uint8_t  modbus_server_unit_id   = 3;    // 0 = accept any unit id
+    // SMA Modbus TCP server -- the network/protocol adapter. Its persistent
+    // config is mirrored into the controller's cached fields below so the
+    // dispatch handlers can read them without going through the server.
+    SbseModbusServer modbus_server;
+    bool     modbus_server_enabled    = false;
+    uint16_t modbus_server_port       = 502;
+    uint8_t  modbus_server_unit_id    = 3;       // 0 = accept any unit id
     uint32_t modbus_server_watchdog_ms = 60000;  // 0 disables
     bool     modbus_server_use_grid_spt = false; // mirror GridWSpt -> target_grid_w
-
-    // Modbus TCP server: runtime
-    TFModbusTCPServer modbus_server{TFModbusTCPByteOrder::Host};
-    bool     modbus_server_running   = false;
-    uint64_t modbus_server_tick_task_id = 0;
 
     // Sticky OpMod (40236) latched between writes. 2424 = Default/Normal (P loop).
     // 2289 = Battery charging (force-charge). 2290 = Battery discharging.
@@ -187,24 +182,8 @@ private:
     uint16_t buf_soc     [2];
     uint16_t buf_setpoint[4];
 
-    // --- 5-min live trace ring buffer (1 Hz sampling) ---
-    // Served by GET /sbse_controller/history so a freshly-loaded dashboard
-    // shows the device's recent history instead of an empty chart.
-    struct HistorySample {
-        micros_t captured_us;
-        int16_t  grid_w;
-        int16_t  battery_w;
-        int16_t  setpoint_w;
-        int16_t  target_w;
-    };
-    static constexpr size_t HISTORY_CAPACITY = 300;  // 5 min * 60 s
-    HistorySample history_samples[HISTORY_CAPACITY] = {};
-    size_t   history_count   = 0;       // valid entries, <= capacity
-    size_t   history_head    = 0;       // next write slot
-    micros_t history_last_us = -1_us;   // last capture (for 1 Hz throttle)
-
-    void maybe_capture_history();
-    void format_history(micros_t now, class StringBuilder *sb) const;
+    // --- 5-min live trace, served via GET /sbse_controller/history ---
+    SbseTraceHistory trace_history;
 };
 
 #if defined(__GNUC__)
