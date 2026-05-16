@@ -34,7 +34,10 @@ let x = {
             "mode_safety":          "safety",
             "mode_faulted":         "faulted",
             "mode_force_charge":    "force charge",
-            "mode_force_discharge": "force discharge"
+            "mode_force_discharge": "force discharge",
+            "mode_blocked":         "blocked",
+            "mode_block_charge":    "charge blocked",
+            "mode_block_discharge": "discharge blocked"
         },
         "chart": {
             "grid":     "Grid (EMA)",

@@ -48,15 +48,18 @@ public:
     void pre_reboot() override;
 
     enum class Mode : uint8_t {
-        Disabled       = 0,
-        NotConnected   = 1,
-        Stale          = 2,
-        Running        = 3,
-        Faulted        = 4,
-        Paused         = 5,
-        Safety         = 6,
-        ForceCharge    = 7,
-        ForceDischarge = 8,
+        Disabled        = 0,
+        NotConnected    = 1,
+        Stale           = 2,
+        Running         = 3,
+        Faulted         = 4,
+        Paused          = 5,
+        Safety          = 6,
+        ForceCharge     = 7,
+        ForceDischarge  = 8,
+        Blocked         = 9,    // max_charge_w == 0 && max_discharge_w == 0
+        BlockCharge     = 10,   // max_charge_w == 0 (charge blocked, discharge allowed)
+        BlockDischarge  = 11,   // max_discharge_w == 0 (discharge blocked, charge allowed)
     };
 
 private:
