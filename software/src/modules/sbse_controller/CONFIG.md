@@ -14,6 +14,20 @@ JSON payloads must contain **all** keys of the target object (`force_same_keys`
 is on for HTTP PUTs and MQTT topic writes). The standard pattern is
 GET → modify → PUT.
 
+### Transport equivalence
+
+Every endpoint listed below is reachable over **all** of the following with
+identical semantics:
+
+- **HTTP** at `http://<sbse-controller-ip>/sbse_controller/<endpoint>`
+  (`GET` for state, `PUT` for config, `POST` for commands).
+- **MQTT** under the configured topic prefix at `<prefix>/sbse_controller/<endpoint>`.
+  States and configs are published on every change; configs and commands
+  accept writes on the corresponding `…/update` and command topics.
+- **Built-in dashboard** at `http://<sbse-controller-ip>/` — Status page
+  (live trace + active_config sliders + commands) and SBSE Controller
+  sub-page (persistent config).
+
 ## Init-only fields (persistent `config` only)
 
 | Field | Default | Units / range | Purpose |
@@ -70,7 +84,34 @@ GET → modify → PUT.
 |---|---|---|
 | `sbse_controller/config_update` | full `config` object | Validates, writes NVS, hot-reloads live-tunable subset. Equivalent to `PUT /sbse_controller/config`. |
 | `sbse_controller/active_config_update` | full `active_config` object | Validates, updates runtime fields. No flash write. Equivalent to `PUT /sbse_controller/active_config`. |
-| `sbse_controller/force_release` | empty | Writes one 0 W setpoint and pauses the loop for 30 s. `mode → paused`. |
+| `sbse_controller/force_release` | empty | Writes one 0 W setpoint and pauses the loop for 30 s. `mode → paused`. Clears any Modbus-driven force-mode (operator takeover). |
+| `sbse_controller/resume` | empty | Ends a `force_release` pause early. No-op if not paused. Also clears any Modbus force-mode. |
+
+## Trace history endpoint (HTTP only)
+
+`GET /sbse_controller/history` returns the last ~5 minutes of (grid, battery,
+setpoint, target) samples that the controller has captured at 1 Hz. The
+dashboard fetches this once on page load to seed the live chart so a reload
+doesn't blank the trace. The buffer is RAM-only (~3.6 KB); it does not
+survive a controller reboot.
+
+The wire format is:
+
+```json
+{
+  "samples": [
+    [age_ms, grid_w, battery_w, setpoint_w, target_w],
+    ...
+  ]
+}
+```
+
+Samples are ordered oldest → newest. `age_ms` is the row's age in
+milliseconds *at the moment of the HTTP response* — i.e. compute the
+absolute timestamp as `now − age_ms`. This means the consumer doesn't need
+NTP sync between the device and the client. The other four fields are
+int16 (saturating). The endpoint is HTTP-only; the buffer is not exposed
+via MQTT.
 
 ## Modbus TCP server (external control)
 
@@ -162,17 +203,25 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   ema_grid       ← α_grid · measured_grid  + (1 − α_grid) · ema_grid
   d_ema_grid     = ema_grid − previous_ema_grid    (0 on the first cycle)
-  delta          = ema_grid − target_grid_w
-  raw_setpoint   = battery_now + Kp · delta + Kd · d_ema_grid
-  raw_setpoint   = clamp(raw_setpoint, −max_charge_w, +max_discharge_w)
+
+  if modbus_force_w != 0:                          ── SMA OpMod 2289 / 2290
+    raw_setpoint = modbus_force_w                  ── (P+D bypassed)
+  else:
+    delta        = ema_grid − target_grid_w
+    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
+
   raw_setpoint   = clamp(raw_setpoint, by SoC: 100 % blocks charge, 0 % blocks discharge)
+  raw_setpoint   = clamp(raw_setpoint, −max_charge_w, +max_discharge_w)
   ema_setpoint   ← α_set · raw_setpoint + (1 − α_set) · ema_setpoint
   target_w       = round(ema_setpoint)
+
+  trace_history.add_sample(grid_ema, battery_now, last_written_w, target_grid_w)  ── 1 Hz internal throttle
 
   if |target_w − last_written_w| < deadband_w → skip write (inverter holds last setpoint)
   else                                          → write target_w to POWER_SETPOINT_ADDR (unit 3)
 
   if read_fail_streak == safety_zero_after_failures → write 0 W, mode = safety
+  if modbus_active and last Modbus write > watchdog_s ago → revert overrides
 ```
 
 ## Tuning cookbook
@@ -207,9 +256,38 @@ curl http://<sbse-controller-ip>/sbse_controller/config \
   | curl -X PUT http://<sbse-controller-ip>/sbse_controller/config \
          -H 'Content-Type: application/json' -d @-
 
-# Force the loop to release control for 30 s:
+# Force the loop to release control for 30 s, then resume early:
 curl -X POST http://<sbse-controller-ip>/sbse_controller/force_release
+curl -X POST http://<sbse-controller-ip>/sbse_controller/resume
+
+# Fetch the last 5 minutes of (grid, battery, setpoint, target) at 1 Hz:
+curl http://<sbse-controller-ip>/sbse_controller/history | jq '.samples | length'
 
 # Watch the controller:
 watch -n1 'curl -s http://<sbse-controller-ip>/sbse_controller/state | jq'
 ```
+
+## Useful MQTT examples
+
+Assuming the MQTT module is configured with topic prefix `sbse/` and a
+broker is reachable from your machine:
+
+```bash
+# Watch live state:
+mosquitto_sub -h <broker> -t 'sbse/sbse_controller/state'
+
+# Watch active config (publishes on every change):
+mosquitto_sub -h <broker> -t 'sbse/sbse_controller/active_config'
+
+# Live-update one field (full object required by force_same_keys):
+mosquitto_pub -h <broker> -t 'sbse/sbse_controller/active_config_update' \
+              -m "$(mosquitto_sub -h <broker> -t 'sbse/sbse_controller/active_config' -C 1 \
+                    | jq '.target_grid_w = 200')"
+
+# Trigger force_release / resume:
+mosquitto_pub -h <broker> -t 'sbse/sbse_controller/force_release' -m '{}'
+mosquitto_pub -h <broker> -t 'sbse/sbse_controller/resume'        -m '{}'
+```
+
+The history endpoint is HTTP-only — large per-response payload (~15 kB)
+that's wasteful to publish on every chart refresh.
