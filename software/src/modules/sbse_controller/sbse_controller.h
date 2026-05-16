@@ -63,6 +63,13 @@ public:
         BlockDischarge  = 11,   // max_discharge_w == 0 (discharge blocked, charge allowed)
     };
 
+    // SBSE Modbus staging-buffer sizes. Public so sbse_control_loop.cpp can
+    // static_assert these against its register-count constants.
+    static constexpr size_t BUF_GRID_LEN     = 2;
+    static constexpr size_t BUF_BATTERY_LEN  = 8;
+    static constexpr size_t BUF_SOC_LEN      = 2;
+    static constexpr size_t BUF_SETPOINT_LEN = 4;
+
 private:
     // GenericTCPClientPoolConnector
     void connect_callback(TFGenericTCPClientConnectResult result) override;
@@ -176,11 +183,12 @@ private:
     bool     safety_zero_armed  = false;
 
     // --- Modbus staging buffers (per-cycle, owned by the module) ---
-    // sized in the .cpp via the register-count constants
-    uint16_t buf_grid    [2];
-    uint16_t buf_battery [8];
-    uint16_t buf_soc     [2];
-    uint16_t buf_setpoint[4];
+    // Sized via the BUF_*_LEN constants above; the static_asserts in
+    // sbse_control_loop.cpp tie them back to the register-block lengths.
+    uint16_t buf_grid    [BUF_GRID_LEN];
+    uint16_t buf_battery [BUF_BATTERY_LEN];
+    uint16_t buf_soc     [BUF_SOC_LEN];
+    uint16_t buf_setpoint[BUF_SETPOINT_LEN];
 
     // --- 5-min live trace, served via GET /sbse_controller/history ---
     SbseTraceHistory trace_history;
