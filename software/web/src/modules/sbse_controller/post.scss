@@ -5,6 +5,12 @@
     }
 }
 
+[data-bs-theme="dark"] .sbse-card {
+    .card-header {
+        background-color: rgba(255, 255, 255, 0.04);
+    }
+}
+
 // ---- Mode pill ----
 .sbse-mode-pill {
     display: inline-flex;
@@ -86,6 +92,27 @@
 .sbse-tile-charge   { border-left-color: var(--bs-info);    .sbse-tile-icon { color: var(--bs-info);    } }
 .sbse-tile-discharge{ border-left-color: var(--bs-primary); .sbse-tile-icon { color: var(--bs-primary); } }
 .sbse-tile-danger   { border-left-color: var(--bs-danger);  .sbse-tile-icon { color: var(--bs-danger);  } }
+
+// Dark-mode overrides: light text + faint borders on dark bg
+[data-bs-theme="dark"] .sbse-tile {
+    border-color: rgba(255, 255, 255, 0.12);
+    border-left-color: rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.03);
+
+    .sbse-tile-icon  { color: rgba(255, 255, 255, 0.7); }
+    .sbse-tile-label { color: rgba(255, 255, 255, 0.7); }
+    .sbse-tile-unit  { color: rgba(255, 255, 255, 0.7); }
+}
+
+// Re-apply accent tints in dark mode (the generic override above would
+// otherwise wash them out since it matches the icon class too)
+[data-bs-theme="dark"] {
+    .sbse-tile-import   { border-left-color: var(--bs-warning); .sbse-tile-icon { color: var(--bs-warning); } }
+    .sbse-tile-export   { border-left-color: var(--bs-success); .sbse-tile-icon { color: var(--bs-success); } }
+    .sbse-tile-charge   { border-left-color: var(--bs-info);    .sbse-tile-icon { color: var(--bs-info);    } }
+    .sbse-tile-discharge{ border-left-color: var(--bs-primary); .sbse-tile-icon { color: var(--bs-primary); } }
+    .sbse-tile-danger   { border-left-color: var(--bs-danger);  .sbse-tile-icon { color: var(--bs-danger);  } }
+}
 
 // ---- Target-grid slider ----
 .sbse-slider {
