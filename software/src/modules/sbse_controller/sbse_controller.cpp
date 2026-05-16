@@ -149,16 +149,19 @@ static void write_int32be(uint16_t *buf, int32_t value)
 static const char *mode_name(SbseController::Mode m)
 {
     switch (m) {
-        case SbseController::Mode::Disabled:       return "disabled";
-        case SbseController::Mode::NotConnected:   return "not_connected";
-        case SbseController::Mode::Stale:          return "stale";
-        case SbseController::Mode::Running:        return "running";
-        case SbseController::Mode::Faulted:        return "faulted";
-        case SbseController::Mode::Paused:         return "paused";
-        case SbseController::Mode::Safety:         return "safety";
-        case SbseController::Mode::ForceCharge:    return "force_charge";
-        case SbseController::Mode::ForceDischarge: return "force_discharge";
-        default:                                   return "?";
+        case SbseController::Mode::Disabled:        return "disabled";
+        case SbseController::Mode::NotConnected:    return "not_connected";
+        case SbseController::Mode::Stale:           return "stale";
+        case SbseController::Mode::Running:         return "running";
+        case SbseController::Mode::Faulted:         return "faulted";
+        case SbseController::Mode::Paused:          return "paused";
+        case SbseController::Mode::Safety:          return "safety";
+        case SbseController::Mode::ForceCharge:     return "force_charge";
+        case SbseController::Mode::ForceDischarge:  return "force_discharge";
+        case SbseController::Mode::Blocked:         return "blocked";
+        case SbseController::Mode::BlockCharge:     return "block_charge";
+        case SbseController::Mode::BlockDischarge:  return "block_discharge";
+        default:                                    return "?";
     }
 }
 
@@ -956,6 +959,17 @@ SbseController::Mode SbseController::current_running_mode() const
     }
     if (modbus_force_w > 0) {
         return Mode::ForceDischarge;
+    }
+    // The block-* modes are derived from the saturation limits regardless of
+    // source: Modbus, dashboard, MQTT and HTTP all surface the same way.
+    if (max_charge_w == 0 && max_discharge_w == 0) {
+        return Mode::Blocked;
+    }
+    if (max_charge_w == 0) {
+        return Mode::BlockCharge;
+    }
+    if (max_discharge_w == 0) {
+        return Mode::BlockDischarge;
     }
     return Mode::Running;
 }
