@@ -40,7 +40,8 @@ import { ModuleStatus, register_status_provider, StatusResult } from "../../ts/s
 // ---------------------------------------------------------------------------
 
 type Mode = "disabled" | "not_connected" | "stale" | "running" | "paused" | "safety" | "faulted"
-          | "force_charge" | "force_discharge";
+          | "force_charge" | "force_discharge"
+          | "blocked" | "block_charge" | "block_discharge";
 
 const MODE_VARIANT: { [m: string]: string } = {
     running:         "success",
@@ -52,6 +53,9 @@ const MODE_VARIANT: { [m: string]: string } = {
     disabled:        "secondary",
     force_charge:    "primary",
     force_discharge: "primary",
+    blocked:         "warning",
+    block_charge:    "warning",
+    block_discharge: "warning",
 };
 
 function mode_label(mode: string): string {
@@ -65,6 +69,9 @@ function mode_label(mode: string): string {
         case "faulted":         return __("sbse_controller.status.mode_faulted");
         case "force_charge":    return __("sbse_controller.status.mode_force_charge");
         case "force_discharge": return __("sbse_controller.status.mode_force_discharge");
+        case "blocked":         return __("sbse_controller.status.mode_blocked");
+        case "block_charge":    return __("sbse_controller.status.mode_block_charge");
+        case "block_discharge": return __("sbse_controller.status.mode_block_discharge");
         default:                return mode;
     }
 }
@@ -78,6 +85,9 @@ function ModeBadge({mode}: {mode: string}) {
                : mode === "stale" ? <Wifi size={14}/>
                : mode === "force_charge" ? <BatteryCharging size={14}/>
                : mode === "force_discharge" ? <Battery size={14}/>
+               : mode === "blocked" ? <Pause size={14}/>
+               : mode === "block_charge" ? <Battery size={14}/>
+               : mode === "block_discharge" ? <BatteryCharging size={14}/>
                : <Activity size={14}/>;
     return (
         <span class={`badge bg-${variant} sbse-mode-pill`}>
@@ -722,6 +732,13 @@ function build_status(): StatusResult | null {
             return {
                 status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
                 text:   () => `${mode_label(st.mode)} ${fmt_w(st.modbus_force_w)} W` + sim_suffix,
+            };
+        case "blocked":
+        case "block_charge":
+        case "block_discharge":
+            return {
+                status: ModuleStatus.Warning,
+                text:   () => `${mode_label(st.mode)} -- ${fmt_w(st.grid_w_ema)} W` + sim_suffix,
             };
         case "stale":
         case "paused":

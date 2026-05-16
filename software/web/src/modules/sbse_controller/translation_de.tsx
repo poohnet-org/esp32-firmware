@@ -34,7 +34,10 @@ let x = {
             "mode_safety":          "Sicherheitsmodus",
             "mode_faulted":         "Fehler",
             "mode_force_charge":    "Zwangsladung",
-            "mode_force_discharge": "Zwangsentladung"
+            "mode_force_discharge": "Zwangsentladung",
+            "mode_blocked":         "gesperrt",
+            "mode_block_charge":    "Laden gesperrt",
+            "mode_block_discharge": "Entladen gesperrt"
         },
         "chart": {
             "grid":     "Netz (EMA)",

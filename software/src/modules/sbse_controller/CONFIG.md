@@ -48,7 +48,7 @@ GET → modify → PUT.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `mode` | string | `disabled` / `not_connected` / `stale` / `running` / `paused` / `safety` / `faulted` / `force_charge` / `force_discharge`. |
+| `mode` | string | `disabled` / `not_connected` / `stale` / `running` / `paused` / `safety` / `faulted` / `force_charge` / `force_discharge` / `blocked` (both maxes 0) / `block_charge` (`max_charge_w == 0`) / `block_discharge` (`max_discharge_w == 0`). The block-* values are derived from the saturation limits regardless of who set them (Modbus, dashboard, MQTT). |
 | `last_setpoint_w` | int32 | Last value successfully written to the inverter. |
 | `last_write_age_ms` | uint32 | Milliseconds since the last successful write. Grows when the deadband suppresses writes. |
 | `grid_w_raw` | int32 | Most recently read grid power, unsmoothed. |
