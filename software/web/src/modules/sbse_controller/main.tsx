@@ -322,7 +322,8 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                             <StatTile icon={<Activity/>}
                                       label={__("sbse_controller.status.setpoint")}
                                       value={fmt_w(st.last_setpoint_w)}
-                                      unit="W"/>
+                                      unit="W"
+                                      accent={st.last_setpoint_w < 0 ? "charge" : (st.last_setpoint_w > 0 ? "discharge" : null)}/>
                             <StatTile icon={<Activity/>}
                                       label={__("sbse_controller.status.last_write")}
                                       value={fmt_age_ms(st.last_write_age_ms)}/>
