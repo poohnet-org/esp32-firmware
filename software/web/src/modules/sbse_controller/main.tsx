@@ -647,6 +647,13 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                             switch_label_min_width="110px"/>
                     </FormRow>
 
+                    <FormRow label={__("sbse_controller.content.modbus_server_use_grid_spt")}
+                             help={__("sbse_controller.content.modbus_server_use_grid_spt_help")}>
+                        <Switch desc={__("sbse_controller.content.modbus_server_use_grid_spt_desc")}
+                                checked={state.modbus_server_use_grid_spt}
+                                onClick={this.toggle("modbus_server_use_grid_spt")}/>
+                    </FormRow>
+
                 </ConfigForm>
             </SubPage>
         );

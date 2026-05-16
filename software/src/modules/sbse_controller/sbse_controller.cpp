@@ -198,6 +198,11 @@ void SbseController::pre_setup()
         {"modbus_server_port",        Config::Uint16(502)},
         {"modbus_server_unit_id",     Config::Uint(3, 0, 247)},   // 0 = accept any
         {"modbus_server_watchdog_s",  Config::Uint(60, 0, 3600)},  // 0 disables
+        // false (default): Modbus writes to 40793 leave target_grid_w alone.
+        // WARP always sends GridWSpt = 0, so without this guard a Block /
+        // Normal / Block-* write would always zero the operator's target.
+        // true: GridWSpt is mirrored into active_config.target_grid_w.
+        {"modbus_server_use_grid_spt", Config::Bool(false)},
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
         // target_grid_w is a setpoint (a desired value), max_charge_w /
         // max_discharge_w are actuator saturation limits. They're orthogonal:
@@ -274,10 +279,11 @@ void SbseController::load_init_only_from_config()
     host = config.get("host")->asString();
     port = static_cast<uint16_t>(config.get("port")->asUint());
 
-    modbus_server_enabled     = config.get("modbus_server_enabled")->asBool();
-    modbus_server_port        = config.get("modbus_server_port")->asUint16();
-    modbus_server_unit_id     = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
-    modbus_server_watchdog_ms = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
+    modbus_server_enabled       = config.get("modbus_server_enabled")->asBool();
+    modbus_server_port          = config.get("modbus_server_port")->asUint16();
+    modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
+    modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
+    modbus_server_use_grid_spt  = config.get("modbus_server_use_grid_spt")->asBool();
 }
 
 void SbseController::copy_live_tunable_to_active()
@@ -335,10 +341,11 @@ void SbseController::register_urls()
         // restart even on no-op for simplicity.
         bool was_enabled = modbus_server_running;
         uint16_t was_port = modbus_server_port;
-        modbus_server_enabled     = config.get("modbus_server_enabled")->asBool();
-        modbus_server_port        = config.get("modbus_server_port")->asUint16();
-        modbus_server_unit_id     = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
-        modbus_server_watchdog_ms = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
+        modbus_server_enabled       = config.get("modbus_server_enabled")->asBool();
+        modbus_server_port          = config.get("modbus_server_port")->asUint16();
+        modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
+        modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
+        modbus_server_use_grid_spt  = config.get("modbus_server_use_grid_spt")->asBool();
         if (modbus_server_enabled != was_enabled || modbus_server_port != was_port) {
             restart_modbus_server();
         }
@@ -1074,7 +1081,13 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
     // bus (so MQTT / dashboard see the new values immediately) but skips the
     // active_config_update command handler -- which would otherwise clear
     // the force-mode state we just set.
-    active_config.get("target_grid_w")  ->updateInt (target_clamped);
+    //
+    // GridWSpt is only mirrored when the operator opted in. WARP always
+    // sends GridWSpt = 0 in every mode, so the default (off) preserves the
+    // operator's configured target_grid_w across Modbus traffic.
+    if (modbus_server_use_grid_spt) {
+        active_config.get("target_grid_w")->updateInt(target_clamped);
+    }
     active_config.get("max_charge_w")   ->updateUint(max_charge_clamped);
     active_config.get("max_discharge_w")->updateUint(max_discharge_clamped);
     apply_runtime_from_active();
