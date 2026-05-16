@@ -131,6 +131,7 @@ private:
     uint16_t modbus_server_port      = 502;
     uint8_t  modbus_server_unit_id   = 3;    // 0 = accept any unit id
     uint32_t modbus_server_watchdog_ms = 60000;  // 0 disables
+    bool     modbus_server_use_grid_spt = false; // mirror GridWSpt -> target_grid_w
 
     // Modbus TCP server: runtime
     TFModbusTCPServer modbus_server{TFModbusTCPByteOrder::Host};
