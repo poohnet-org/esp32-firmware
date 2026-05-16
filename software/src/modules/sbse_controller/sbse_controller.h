@@ -183,6 +183,25 @@ private:
     uint16_t buf_battery [8];
     uint16_t buf_soc     [2];
     uint16_t buf_setpoint[4];
+
+    // --- 5-min live trace ring buffer (1 Hz sampling) ---
+    // Served by GET /sbse_controller/history so a freshly-loaded dashboard
+    // shows the device's recent history instead of an empty chart.
+    struct HistorySample {
+        micros_t captured_us;
+        int16_t  grid_w;
+        int16_t  battery_w;
+        int16_t  setpoint_w;
+        int16_t  target_w;
+    };
+    static constexpr size_t HISTORY_CAPACITY = 300;  // 5 min * 60 s
+    HistorySample history_samples[HISTORY_CAPACITY] = {};
+    size_t   history_count   = 0;       // valid entries, <= capacity
+    size_t   history_head    = 0;       // next write slot
+    micros_t history_last_us = -1_us;   // last capture (for 1 Hz throttle)
+
+    void maybe_capture_history();
+    void format_history(micros_t now, class StringBuilder *sb) const;
 };
 
 #if defined(__GNUC__)
