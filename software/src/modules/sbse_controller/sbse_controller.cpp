@@ -28,6 +28,7 @@
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 #include "tools/net.h"
+#include "tools/string_builder.h"
 
 #include "gcc_warnings.h"
 
@@ -111,6 +112,17 @@ static constexpr uint16_t SMA_OPMOD_FORCE_DISCHARGE   = 2290;
 // snappier response, higher = less scheduler churn. 20 ms is plenty for a
 // device that sees <1 write/s in normal use.
 static constexpr millis_t MODBUS_SRV_TICK             = 20_ms;
+
+// 5-min live-trace ring buffer (see HistorySample / HISTORY_CAPACITY).
+// One sample per second; the dashboard reads the whole buffer on page load.
+static constexpr micros_t HISTORY_INTERVAL            = 1_s;
+
+static int16_t sat16(int32_t v)
+{
+    if (v > INT16_MAX) return INT16_MAX;
+    if (v < INT16_MIN) return INT16_MIN;
+    return static_cast<int16_t>(v);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -373,6 +385,20 @@ void SbseController::register_urls()
     }, false);
 
     api.addState("sbse_controller/state", &state);
+
+    // Live-trace ring buffer: returns the last ~5 minutes of (grid, battery,
+    // setpoint, target) sampled at 1 Hz, so a freshly-loaded dashboard can
+    // seed its chart instead of starting from a blank canvas.
+    server.on("/sbse_controller/history", HTTP_GET, [this](WebServerRequest request) {
+        StringBuilder sb;
+        // Worst-case per sample: "[9999999,-32768,-32768,-32768,-32768],"
+        // = ~43 bytes. 300 * 50 + 20 outer = ~15 kB.
+        if (!sb.setCapacity(HISTORY_CAPACITY * 50 + 64)) {
+            return request.send_plain(500, "history alloc failed");
+        }
+        this->format_history(now_us(), &sb);
+        return request.send_json(200, sb);
+    });
 
     api.addCommand("sbse_controller/force_release", Config::Null(), {},
                    [this](Language /*language*/, String &/*errmsg*/) {
@@ -714,6 +740,8 @@ void SbseController::compute_and_write()
     state.get("grid_w_ema")->updateInt(lroundf(ema_grid_w));
     state.get("battery_w") ->updateInt(battery_w_raw);
     state.get("battery_soc")->updateUint(soc_pct);
+
+    maybe_capture_history();
 
     // 7) Deadband. If the new target is within deadband of the last write,
     //    skip the write -- the SBSE holds the last commanded setpoint
@@ -1127,4 +1155,54 @@ void SbseController::watchdog_tick()
     logger.printfln("modbus watchdog: no client traffic for %lus, reverting to persistent config",
                     modbus_server_watchdog_ms / 1000u);
     revert_modbus_overrides();
+}
+
+// ---------------------------------------------------------------------------
+// 5-minute live-trace ring buffer
+// ---------------------------------------------------------------------------
+
+void SbseController::maybe_capture_history()
+{
+    const micros_t now = now_us();
+    if (history_last_us != -1_us && (now - history_last_us) < HISTORY_INTERVAL) {
+        return;
+    }
+    history_last_us = now;
+
+    HistorySample &s = history_samples[history_head];
+    s.captured_us = now;
+    s.grid_w      = sat16(lroundf(ema_grid_w));
+    s.battery_w   = sat16(battery_w_raw);
+    s.setpoint_w  = sat16(last_written_w);
+    s.target_w    = sat16(target_grid_w);
+
+    history_head = (history_head + 1) % HISTORY_CAPACITY;
+    if (history_count < HISTORY_CAPACITY) {
+        ++history_count;
+    }
+}
+
+void SbseController::format_history(micros_t now, StringBuilder *sb) const
+{
+    // Wire format: {"samples": [[age_ms, grid, battery, setpoint, target], ...]}
+    // Samples are oldest -> newest. age_ms is computed at response time so the
+    // frontend can rebase against its own clock without depending on NTP sync
+    // between device and browser.
+    sb->puts("{\"samples\":[");
+    if (history_count > 0) {
+        const size_t start = (history_head + HISTORY_CAPACITY - history_count) % HISTORY_CAPACITY;
+        for (size_t i = 0; i < history_count; ++i) {
+            const size_t idx = (start + i) % HISTORY_CAPACITY;
+            const HistorySample &s = history_samples[idx];
+            const uint32_t age_ms = (now - s.captured_us).to<millis_t>().as<uint32_t>();
+            sb->printf("%s[%lu,%d,%d,%d,%d]",
+                       i == 0 ? "" : ",",
+                       age_ms,
+                       static_cast<int>(s.grid_w),
+                       static_cast<int>(s.battery_w),
+                       static_cast<int>(s.setpoint_w),
+                       static_cast<int>(s.target_w));
+        }
+    }
+    sb->puts("]}");
 }

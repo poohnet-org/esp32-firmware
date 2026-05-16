@@ -220,6 +220,33 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
         });
     }
 
+    override async componentDidMount() {
+        // Seed the chart with the device's own 5-minute ring buffer so a
+        // page reload doesn't blank the trace. Failures (e.g. offline) just
+        // leave the live event listener building a fresh history.
+        try {
+            const resp = await fetch("/sbse_controller/history");
+            if (!resp.ok) return;
+            const body = await resp.json() as {
+                samples: [number, number, number, number, number][];
+            };
+            const now_s = Date.now() / 1000;
+            const seeded: Sample[] = body.samples.map(([age_ms, grid, battery, setpoint, target]) => ({
+                ts: now_s - age_ms / 1000,
+                grid, battery, setpoint, target,
+            }));
+            this.setState(prev => {
+                // Merge: keep seeded samples that predate whatever live samples
+                // already accumulated between constructor and now.
+                const oldest_live = prev.samples.length > 0 ? prev.samples[0].ts : Infinity;
+                const merged = seeded.filter(s => s.ts < oldest_live).concat(prev.samples);
+                return { samples: merged };
+            });
+        } catch (_) {
+            // ignore: keep the live-only behaviour
+        }
+    }
+
     set_pending = (field: LiveField, value: number) => {
         this.setState({ pending: { ...this.state.pending, [field]: value } });
     };
