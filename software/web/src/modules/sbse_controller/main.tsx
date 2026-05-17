@@ -174,12 +174,13 @@ export function SbseControllerNavbar() {
 // ---------------------------------------------------------------------------
 
 // Live-tunable fields the dashboard exposes as slider+input+apply rows.
-type LiveField = "target_grid_w" | "max_charge_w" | "max_discharge_w";
+type LiveField = "grid_charge_target_w" | "grid_discharge_target_w" | "max_charge_w" | "max_discharge_w";
 
 interface Pending {
-    target_grid_w:   number;
-    max_charge_w:    number;
-    max_discharge_w: number;
+    grid_charge_target_w:    number;
+    grid_discharge_target_w: number;
+    max_charge_w:            number;
+    max_discharge_w:         number;
 }
 
 interface SbseControllerStatusState {
@@ -190,9 +191,10 @@ interface SbseControllerStatusState {
 function snapshot_pending(): Pending {
     const ac = API.get("sbse_controller/active_config");
     return {
-        target_grid_w:   ac.target_grid_w,
-        max_charge_w:    ac.max_charge_w,
-        max_discharge_w: ac.max_discharge_w,
+        grid_charge_target_w:    ac.grid_charge_target_w,
+        grid_discharge_target_w: ac.grid_discharge_target_w,
+        max_charge_w:            ac.max_charge_w,
+        max_discharge_w:         ac.max_discharge_w,
     };
 }
 
@@ -200,7 +202,12 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
     constructor() {
         super();
         this.state = {
-            pending: { target_grid_w: 0, max_charge_w: 5000, max_discharge_w: 5000 },
+            pending: {
+                grid_charge_target_w: 0,
+                grid_discharge_target_w: 0,
+                max_charge_w: 5000,
+                max_discharge_w: 5000,
+            },
             samples: [],
         };
 
@@ -215,11 +222,12 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
             const now = Date.now() / 1000;
 
             samples.push({
-                ts:       now,
-                grid:     st.grid_w_ema,
-                battery:  st.battery_w,
-                setpoint: st.last_setpoint_w,
-                target:   ac.target_grid_w,
+                ts:        now,
+                grid:      st.grid_w_ema,
+                battery:   st.battery_w,
+                setpoint:  st.last_setpoint_w,
+                target_lo: ac.grid_charge_target_w,
+                target_hi: ac.grid_discharge_target_w,
             });
 
             const cutoff = now - CHART_WINDOW_S;
@@ -238,13 +246,14 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
             const resp = await fetch("/sbse_controller/history");
             if (!resp.ok) return;
             const body = await resp.json() as {
-                samples: [number, number, number, number, number][];
+                samples: [number, number, number, number, number, number][];
             };
             const now_s = Date.now() / 1000;
-            const seeded: Sample[] = body.samples.map(([age_ms, grid, battery, setpoint, target]) => ({
-                ts: now_s - age_ms / 1000,
-                grid, battery, setpoint, target,
-            }));
+            const seeded: Sample[] = body.samples.map(
+                ([age_ms, grid, battery, setpoint, target_lo, target_hi]) => ({
+                    ts: now_s - age_ms / 1000,
+                    grid, battery, setpoint, target_lo, target_hi,
+                }));
             this.setState(prev => {
                 // Merge: keep seeded samples that predate whatever live samples
                 // already accumulated between constructor and now.
@@ -296,14 +305,19 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
                         <div class="d-flex align-items-center gap-2">
-                            <span class={`badge bg-${st.soft_target ? "info" : "secondary"} sbse-mode-pill`}
-                                  title={st.soft_target
-                                         ? __("sbse_controller.status.soft_badge_help_title")
-                                         : __("sbse_controller.status.hard_badge_help_title")}>
-                                {st.soft_target
-                                 ? __("sbse_controller.status.soft_badge")
-                                 : __("sbse_controller.status.hard_badge")}
-                            </span>
+                            {(() => {
+                                const soft = ac.grid_charge_target_w !== ac.grid_discharge_target_w;
+                                return (
+                                    <span class={`badge bg-${soft ? "info" : "secondary"} sbse-mode-pill`}
+                                          title={soft
+                                                 ? __("sbse_controller.status.soft_badge_help_title")
+                                                 : __("sbse_controller.status.hard_badge_help_title")}>
+                                        {soft
+                                         ? __("sbse_controller.status.soft_badge")
+                                         : __("sbse_controller.status.hard_badge")}
+                                    </span>
+                                );
+                            })()}
                             {st.modbus_active ?
                                 <span class="badge bg-primary sbse-mode-pill"
                                       title={__("sbse_controller.status.mb_badge_help_title")}>
@@ -358,15 +372,26 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                         <hr/>
 
                         <LiveSliderRow
-                            label={__("sbse_controller.status.target_grid_w")}
-                            help={__("sbse_controller.status.target_grid_w_help")}
+                            label={__("sbse_controller.status.grid_charge_target_w")}
+                            help={__("sbse_controller.status.grid_charge_target_w_help")}
                             min={-10000}
                             max={10000}
                             step={50}
-                            pending={this.state.pending.target_grid_w}
-                            current={ac.target_grid_w}
-                            onValue={(v) => this.set_pending("target_grid_w", v)}
-                            onApply={() => this.apply_field("target_grid_w", this.state.pending.target_grid_w)}/>
+                            pending={this.state.pending.grid_charge_target_w}
+                            current={ac.grid_charge_target_w}
+                            onValue={(v) => this.set_pending("grid_charge_target_w", v)}
+                            onApply={() => this.apply_field("grid_charge_target_w", this.state.pending.grid_charge_target_w)}/>
+
+                        <LiveSliderRow
+                            label={__("sbse_controller.status.grid_discharge_target_w")}
+                            help={__("sbse_controller.status.grid_discharge_target_w_help")}
+                            min={-10000}
+                            max={10000}
+                            step={50}
+                            pending={this.state.pending.grid_discharge_target_w}
+                            current={ac.grid_discharge_target_w}
+                            onValue={(v) => this.set_pending("grid_discharge_target_w", v)}
+                            onApply={() => this.apply_field("grid_discharge_target_w", this.state.pending.grid_discharge_target_w)}/>
 
                         <LiveSliderRow
                             label={__("sbse_controller.status.max_charge_w")}
@@ -428,7 +453,8 @@ interface Sample {
     grid: number;          // W
     battery: number;       // W
     setpoint: number;      // W
-    target: number;        // W
+    target_lo: number;     // W -- grid_charge_target_w at capture time
+    target_hi: number;     // W -- grid_discharge_target_w at capture time
 }
 
 interface SbseControllerChartProps {
@@ -447,21 +473,23 @@ class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
             data = { keys: [null], names: [null], values: [null] };
         } else {
             data = {
-                keys:   [null,                       "grid",    "battery", "setpoint", "target"],
+                keys:   [null,                       "grid",    "battery", "setpoint", "target_lo", "target_hi"],
                 names:  [null,
                          __("sbse_controller.chart.grid"),
                          __("sbse_controller.chart.battery"),
                          __("sbse_controller.chart.setpoint"),
-                         __("sbse_controller.chart.target")],
-                values: [[], [], [], [], []],
-                paths:  [null, UplotPath.Line, UplotPath.Line, UplotPath.Line, UplotPath.Step],
+                         __("sbse_controller.chart.target_lo"),
+                         __("sbse_controller.chart.target_hi")],
+                values: [[], [], [], [], [], []],
+                paths:  [null, UplotPath.Line, UplotPath.Line, UplotPath.Line, UplotPath.Step, UplotPath.Step],
             };
             for (const s of samples) {
                 data.values[0].push(s.ts);
                 data.values[1].push(s.grid);
                 data.values[2].push(s.battery);
                 data.values[3].push(s.setpoint);
-                data.values[4].push(s.target);
+                data.values[4].push(s.target_lo);
+                data.values[5].push(s.target_hi);
             }
         }
 
@@ -554,13 +582,6 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
 
                     <FormSeparator heading={__("sbse_controller.content.section_mode")}/>
 
-                    <FormRow label={__("sbse_controller.content.soft_target")}
-                             help={__("sbse_controller.content.soft_target_help")}>
-                        <Switch desc={__("sbse_controller.content.soft_target_desc")}
-                                checked={state.soft_target}
-                                onClick={this.toggle("soft_target")}/>
-                    </FormRow>
-
                     <FormRow label={__("sbse_controller.content.simulation_mode")}
                              help={__("sbse_controller.content.simulation_mode_help")}>
                         <Switch desc={__("sbse_controller.content.simulation_mode_desc")}
@@ -584,11 +605,18 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
 
                     <FormSeparator heading={__("sbse_controller.content.section_targets")}/>
 
-                    <FormRow label={__("sbse_controller.content.target_grid_w")}
-                             help={__("sbse_controller.content.target_grid_w_help")}>
+                    <FormRow label={__("sbse_controller.content.grid_charge_target_w")}
+                             help={__("sbse_controller.content.grid_charge_target_w_help")}>
                         <InputNumber min={-10000} max={10000} unit="W"
-                                     value={state.target_grid_w}
-                                     onValue={this.set("target_grid_w")}/>
+                                     value={state.grid_charge_target_w}
+                                     onValue={this.set("grid_charge_target_w")}/>
+                    </FormRow>
+
+                    <FormRow label={__("sbse_controller.content.grid_discharge_target_w")}
+                             help={__("sbse_controller.content.grid_discharge_target_w_help")}>
+                        <InputNumber min={-10000} max={10000} unit="W"
+                                     value={state.grid_discharge_target_w}
+                                     onValue={this.set("grid_discharge_target_w")}/>
                     </FormRow>
 
                     <FormRow label={__("sbse_controller.content.max_charge_w")}
@@ -740,7 +768,14 @@ function build_status(): StatusResult | null {
         case "running":
             return {
                 status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
-                text:   () => `${fmt_w(st.grid_w_ema)} W → ${fmt_w(ac.target_grid_w)} W` + sim_suffix,
+                text:   () => {
+                    const lo = ac.grid_charge_target_w;
+                    const hi = ac.grid_discharge_target_w;
+                    const target_text = lo === hi
+                        ? `${fmt_w(lo)} W`
+                        : `${fmt_w(lo)}…${fmt_w(hi)} W`;
+                    return `${fmt_w(st.grid_w_ema)} W → ${target_text}` + sim_suffix;
+                },
             };
         case "force_charge":
         case "force_discharge":

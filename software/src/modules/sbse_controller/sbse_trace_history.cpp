@@ -34,7 +34,8 @@ static int16_t sat16(int32_t v)
     return static_cast<int16_t>(v);
 }
 
-void SbseTraceHistory::add_sample(int32_t grid_w, int32_t battery_w, int32_t setpoint_w, int32_t target_w)
+void SbseTraceHistory::add_sample(int32_t grid_w, int32_t battery_w, int32_t setpoint_w,
+                                  int32_t target_lo_w, int32_t target_hi_w)
 {
     const micros_t now = now_us();
     if (last_us != -1_us && (now - last_us) < SAMPLE_INTERVAL) {
@@ -47,7 +48,8 @@ void SbseTraceHistory::add_sample(int32_t grid_w, int32_t battery_w, int32_t set
     s.grid_w      = sat16(grid_w);
     s.battery_w   = sat16(battery_w);
     s.setpoint_w  = sat16(setpoint_w);
-    s.target_w    = sat16(target_w);
+    s.target_lo_w = sat16(target_lo_w);
+    s.target_hi_w = sat16(target_hi_w);
 
     head = (head + 1) % CAPACITY;
     if (count < CAPACITY) {
@@ -64,13 +66,14 @@ void SbseTraceHistory::format(micros_t now, StringBuilder *sb) const
             const size_t idx = (start + i) % CAPACITY;
             const Sample &s = samples[idx];
             const uint32_t age_ms = (now - s.captured_us).to<millis_t>().as<uint32_t>();
-            sb->printf("%s[%lu,%d,%d,%d,%d]",
+            sb->printf("%s[%lu,%d,%d,%d,%d,%d]",
                        i == 0 ? "" : ",",
                        age_ms,
                        static_cast<int>(s.grid_w),
                        static_cast<int>(s.battery_w),
                        static_cast<int>(s.setpoint_w),
-                       static_cast<int>(s.target_w));
+                       static_cast<int>(s.target_lo_w),
+                       static_cast<int>(s.target_hi_w));
         }
     }
     sb->puts("]}");
