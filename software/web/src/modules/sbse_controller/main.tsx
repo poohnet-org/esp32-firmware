@@ -160,6 +160,79 @@ function LiveSliderRow(props: {
     );
 }
 
+// Dual-handle range slider for the grid-target deadzone. Two stacked
+// <input type="range"> elements share a transparent track; only the thumbs
+// are clickable, so they layer cleanly. A separate <div> draws the active
+// (between-handles) portion of the track. lo / hi are kept in order by
+// clamping each handle against the other at input time.
+function LiveRangeSliderRow(props: {
+    label: string,
+    help?: ComponentChildren,
+    min: number,
+    max: number,
+    step: number,
+    pending_lo: number,
+    pending_hi: number,
+    current_lo: number,
+    current_hi: number,
+    onValueLo: (v: number) => void,
+    onValueHi: (v: number) => void,
+    onApply: () => void,
+}) {
+    const span = props.max - props.min;
+    const lo_pct = span > 0 ? ((props.pending_lo - props.min) / span) * 100 : 0;
+    const hi_pct = span > 0 ? ((props.pending_hi - props.min) / span) * 100 : 100;
+    const dirty  = props.pending_lo !== props.current_lo
+                || props.pending_hi !== props.current_hi;
+    return (
+        <FormRow label={props.label} help={props.help}>
+            <div class="d-flex gap-2 align-items-center">
+                <div class="sbse-range-slider flex-grow-1">
+                    <div class="sbse-range-track"/>
+                    <div class="sbse-range-active"
+                         style={`left:${lo_pct}%;right:${100 - hi_pct}%`}/>
+                    <input type="range"
+                           class="sbse-range-input"
+                           min={props.min} max={props.max} step={props.step}
+                           value={props.pending_lo}
+                           onInput={(e) => {
+                               const v = parseInt((e.target as HTMLInputElement).value, 10);
+                               props.onValueLo(Math.min(v, props.pending_hi));
+                           }}/>
+                    <input type="range"
+                           class="sbse-range-input"
+                           min={props.min} max={props.max} step={props.step}
+                           value={props.pending_hi}
+                           onInput={(e) => {
+                               const v = parseInt((e.target as HTMLInputElement).value, 10);
+                               props.onValueHi(Math.max(v, props.pending_lo));
+                           }}/>
+                </div>
+                <div class="d-flex gap-1 align-items-center" style="min-width: 14em;">
+                    <div style="width: 6em;">
+                        <InputNumber unit="W"
+                                     min={props.min} max={props.pending_hi}
+                                     value={props.pending_lo}
+                                     onValue={props.onValueLo}/>
+                    </div>
+                    <span>…</span>
+                    <div style="width: 6em;">
+                        <InputNumber unit="W"
+                                     min={props.pending_lo} max={props.max}
+                                     value={props.pending_hi}
+                                     onValue={props.onValueHi}/>
+                    </div>
+                </div>
+                <Button variant="primary"
+                        disabled={!dirty}
+                        onClick={props.onApply}>
+                    {__("sbse_controller.status.apply")}
+                </Button>
+            </div>
+        </FormRow>
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Navbar entry
 // ---------------------------------------------------------------------------
@@ -272,10 +345,19 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
     };
 
     apply_field = (field: LiveField, value: number) => {
-        // target_grid_w is a setpoint (a wish), max_charge_w / max_discharge_w
-        // are saturation limits. They are independent; the controller will
-        // saturate at the limits when the target can't physically be reached.
         const next = { ...API.get("sbse_controller/active_config"), [field]: value };
+        API.save("sbse_controller/active_config", next,
+                 () => __("sbse_controller.script.save_active_failed"));
+    };
+
+    // Atomic two-field update so the validator never sees a transient state
+    // where grid_discharge_target_w < grid_charge_target_w during a swap.
+    apply_grid_target_range = (lo: number, hi: number) => {
+        const next = {
+            ...API.get("sbse_controller/active_config"),
+            grid_charge_target_w:    lo,
+            grid_discharge_target_w: hi,
+        };
         API.save("sbse_controller/active_config", next,
                  () => __("sbse_controller.script.save_active_failed"));
     };
@@ -366,27 +448,21 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
 
                         <hr/>
 
-                        <LiveSliderRow
-                            label={__("sbse_controller.status.grid_charge_target_w")}
-                            help={__("sbse_controller.status.grid_charge_target_w_help")}
+                        <LiveRangeSliderRow
+                            label={__("sbse_controller.status.grid_target_range")}
+                            help={__("sbse_controller.status.grid_target_range_help")}
                             min={-10000}
                             max={10000}
                             step={50}
-                            pending={this.state.pending.grid_charge_target_w}
-                            current={ac.grid_charge_target_w}
-                            onValue={(v) => this.set_pending("grid_charge_target_w", v)}
-                            onApply={() => this.apply_field("grid_charge_target_w", this.state.pending.grid_charge_target_w)}/>
-
-                        <LiveSliderRow
-                            label={__("sbse_controller.status.grid_discharge_target_w")}
-                            help={__("sbse_controller.status.grid_discharge_target_w_help")}
-                            min={-10000}
-                            max={10000}
-                            step={50}
-                            pending={this.state.pending.grid_discharge_target_w}
-                            current={ac.grid_discharge_target_w}
-                            onValue={(v) => this.set_pending("grid_discharge_target_w", v)}
-                            onApply={() => this.apply_field("grid_discharge_target_w", this.state.pending.grid_discharge_target_w)}/>
+                            pending_lo={this.state.pending.grid_charge_target_w}
+                            pending_hi={this.state.pending.grid_discharge_target_w}
+                            current_lo={ac.grid_charge_target_w}
+                            current_hi={ac.grid_discharge_target_w}
+                            onValueLo={(v) => this.set_pending("grid_charge_target_w", v)}
+                            onValueHi={(v) => this.set_pending("grid_discharge_target_w", v)}
+                            onApply={() => this.apply_grid_target_range(
+                                this.state.pending.grid_charge_target_w,
+                                this.state.pending.grid_discharge_target_w)}/>
 
                         <LiveSliderRow
                             label={__("sbse_controller.status.max_charge_w")}
