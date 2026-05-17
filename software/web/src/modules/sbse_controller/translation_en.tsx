@@ -119,9 +119,11 @@ let x = {
             "modbus_server_unit_id_help":      <>Modbus unit id this server responds to. Default <code>3</code> matches the SMA Hybrid Inverter convention so existing clients work unchanged. Set to <code>0</code> to accept any unit id.</>,
             "modbus_server_watchdog_s":        "Watchdog timeout",
             "modbus_server_watchdog_s_help":   <>If no Modbus write arrives within this many seconds, the controller reverts the live overrides (<code>target_grid_w</code>, <code>max_charge_w</code>, <code>max_discharge_w</code>) to the persistent config values and exits force-mode. SMA's real-inverter watchdog is 5 minutes; the default of 60 s matches the resend interval that the WARP charger uses. Disable to leave the most recent setpoint in place forever.</>,
-            "modbus_server_use_grid_spt":      "Use Modbus GridWSpt for target_grid_w",
-            "modbus_server_use_grid_spt_desc": "Let Modbus writes overwrite the configured target",
-            "modbus_server_use_grid_spt_help": <>When <strong>off</strong> (default), Modbus writes to register 40793 only update <code>max_charge_w</code> and <code>max_discharge_w</code>; the operator-configured <code>target_grid_w</code> is preserved. This matches the WARP charger's "SMA Hybrid Inverter" battery class, which always sends <code>GridWSpt = 0</code> regardless of mode -- enabling this option there would zero out your target on every mode change. When <strong>on</strong>, every Modbus write also sets <code>active_config.target_grid_w</code> from the <code>GridWSpt</code> field. Enable for clients that genuinely use the grid-setpoint field.</>
+            "modbus_server_authority":            "Modbus authority",
+            "modbus_server_authority_help":       <>How much of the operator's <code>active_config</code> an external Modbus client is allowed to overwrite on every WriteMultipleRegisters at register 40793. The SMA <code>OpMod</code> force-mode commands (2289 / 2290) are always honoured; this setting only governs the persistent caps and grid targets.</>,
+            "modbus_server_authority_force_only": "Force commands only — preserve all my settings",
+            "modbus_server_authority_caps":       "Caps — apply max_charge_w / max_discharge_w (default)",
+            "modbus_server_authority_full":       "Full — also apply GridWSpt to both grid targets"
         },
         "script": {
             "save_failed":          "Failed to save the SBSE controller settings",

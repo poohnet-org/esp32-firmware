@@ -119,9 +119,11 @@ let x = {
             "modbus_server_unit_id_help":      <>Modbus-Unit-ID, auf die dieser Server antwortet. Der Standardwert <code>3</code> entspricht der SMA-Hybrid-Wechselrichter-Konvention, sodass bestehende Clients ohne Änderung funktionieren. Auf <code>0</code> setzen, um jede Unit-ID zu akzeptieren.</>,
             "modbus_server_watchdog_s":        "Watchdog-Timeout",
             "modbus_server_watchdog_s_help":   <>Trifft innerhalb dieser Anzahl Sekunden kein Modbus-Schreibvorgang ein, setzt der Regler die Live-Überschreibungen (<code>target_grid_w</code>, <code>max_charge_w</code>, <code>max_discharge_w</code>) auf die persistenten Konfigurationswerte zurück und verlässt den Force-Modus. Der echte SMA-Wechselrichter-Watchdog läuft nach 5 Minuten ab; der Standard von 60 s entspricht dem Sendeintervall des WARP-Chargers. Deaktivieren, um den letzten Sollwert dauerhaft zu halten.</>,
-            "modbus_server_use_grid_spt":      "Modbus-GridWSpt als Zielwert verwenden",
-            "modbus_server_use_grid_spt_desc": "Modbus-Schreibvorgänge überschreiben den konfigurierten Zielwert",
-            "modbus_server_use_grid_spt_help": <>Wenn <strong>aus</strong> (Standard), aktualisieren Modbus-Schreibvorgänge auf Register 40793 nur <code>max_charge_w</code> und <code>max_discharge_w</code>; der vom Bediener konfigurierte <code>target_grid_w</code> bleibt erhalten. Das entspricht dem Verhalten der „SMA Hybrid Inverter"-Batterieklasse des WARP-Chargers, die unabhängig vom Modus stets <code>GridWSpt = 0</code> sendet -- bei aktivierter Option würde das den Zielwert bei jedem Moduswechsel auf 0 setzen. Wenn <strong>ein</strong>, übernimmt jeder Modbus-Schreibvorgang das <code>GridWSpt</code>-Feld auch in <code>active_config.target_grid_w</code>. Für Clients aktivieren, die das Grid-Setpoint-Feld tatsächlich nutzen.</>
+            "modbus_server_authority":            "Modbus-Befugnis",
+            "modbus_server_authority_help":       <>Wie viel der vom Bediener konfigurierten <code>active_config</code> darf ein externer Modbus-Client bei jedem WriteMultipleRegisters auf Register 40793 überschreiben. Die SMA-<code>OpMod</code>-Force-Befehle (2289 / 2290) werden stets ausgeführt; diese Einstellung steuert nur die persistenten Caps und Netz-Zielwerte.</>,
+            "modbus_server_authority_force_only": "Nur Force-Befehle — alle eigenen Einstellungen schützen",
+            "modbus_server_authority_caps":       "Caps — max_charge_w / max_discharge_w übernehmen (Standard)",
+            "modbus_server_authority_full":       "Voll — zusätzlich GridWSpt in beide Netz-Zielwerte übernehmen"
         },
         "script": {
             "save_failed":          "Speichern der SBSE-Regler-Einstellungen fehlgeschlagen",

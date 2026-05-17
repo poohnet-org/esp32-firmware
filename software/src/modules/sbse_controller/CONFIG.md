@@ -41,7 +41,7 @@ identical semantics:
 | `modbus_server_port` | `502` | uint16 | Port the SMA-compatible server listens on. Requires a reboot to take effect. |
 | `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `0` means "accept any". Live-tunable (no reboot needed). |
 | `modbus_server_watchdog_s` | `60` | seconds, 0…3600 | Watchdog timeout. If no Modbus write arrives within this many seconds, the controller reverts the live overrides to the persistent config and exits force-mode. `0` disables the watchdog. Live-tunable. |
-| `modbus_server_use_grid_spt` | `false` | bool | When `false` (default), Modbus writes to register 40793 leave the grid targets alone -- only `max_charge_w` and `max_discharge_w` are updated. This matches the WARP charger's behaviour (it always sends `GridWSpt = 0` regardless of mode). When `true`, every Modbus write copies `GridWSpt` into **both** `grid_charge_target_w` and `grid_discharge_target_w` (hard-mode chase), matching what a real SMA Sunny Boy Storage would do. Live-tunable. |
+| `modbus_server_authority` | `1` (= caps) | uint8, 0…2 | How much of the operator's `active_config` an external Modbus client is allowed to overwrite on every WriteMultipleRegisters at register 40793. Live-tunable. See [Modbus authority](#modbus-authority-modbus_server_authority) below for the per-value behaviour table. |
 
 ## Live-tunable fields (in both `config` and `active_config`)
 
@@ -134,15 +134,27 @@ The latest `OpMod` value (sticky between writes) is interpreted on every `40793`
 
 | OpMod | Effect on the SBSE controller |
 |---|---|
-| `2424` (Default/Normal/Block/Block-Charge/Block-Discharge) | P controller stays in charge. `BatChaMaxW` → `active_config.max_charge_w`, `BatDchgMaxW` → `active_config.max_discharge_w`. With `modbus_server_use_grid_spt = true` (see below) `GridWSpt` is copied into **both** `active_config.grid_charge_target_w` and `active_config.grid_discharge_target_w` (hard-mode chase). Force-mode is cleared. |
+| `2424` (Default/Normal/Block/Block-Charge/Block-Discharge) | P controller stays in charge. Which of `BatChaMaxW` / `BatDchgMaxW` / `GridWSpt` actually land in `active_config` depends on `modbus_server_authority` -- see [Modbus authority](#modbus-authority-modbus_server_authority) below. Force-mode is cleared. |
 | `2289` (Battery charging) | **Force charge.** P controller bypassed. Battery commanded at `−BatChaMaxW` W (charging). Mode reports `force_charge`. EMA on the setpoint, deadband, SoC clamps and `max_*` still apply on the output. |
 | `2290` (Battery discharging) | **Force discharge.** P controller bypassed. Battery commanded at `+BatDchgMaxW` W (discharging). Mode reports `force_discharge`. Same output filters as above. |
 
 Each `40793` write is mirrored into `active_config` immediately (visible at `GET /sbse_controller/active_config` and on the dashboard's sliders).
 
-### GridWSpt handling (`modbus_server_use_grid_spt`)
+### Modbus authority (`modbus_server_authority`)
 
-The WARP charger's "SMA Hybrid Inverter" battery class always writes `GridWSpt = 0` regardless of the chosen mode. Mirroring that verbatim into the operator's grid targets would zero them out on every mode change — almost certainly not what you want. The default `modbus_server_use_grid_spt = false` therefore ignores `GridWSpt` entirely; only `BatChaMaxW` / `BatDchgMaxW` and the `OpMod`-driven force-mode bits take effect. Switch the option on if you have a Modbus client that genuinely steers the grid setpoint -- when on, `GridWSpt` is mirrored into **both** `grid_charge_target_w` and `grid_discharge_target_w` (matching a real SMA inverter's "I chase this single value in both directions" semantics).
+How much of the operator's `active_config` an external Modbus client is allowed to overwrite on each `40793` write. The SMA `OpMod` force-mode commands (`2289` / `2290`) are **always** honoured -- this setting only governs the persistent caps and grid targets.
+
+| Value | What each Modbus write applies to `active_config` | Operator-preserved | Typical use |
+|---:|---|---|---|
+| `0` `force_only` | nothing | `max_charge_w`, `max_discharge_w`, `grid_charge_target_w`, `grid_discharge_target_w` | I just want external force commands (peak shaving, grid services); the rest of my configuration is mine. |
+| `1` `caps` (default) | `BatChaMaxW` → `max_charge_w`, `BatDchgMaxW` → `max_discharge_w`. `GridWSpt` ignored. | `grid_charge_target_w`, `grid_discharge_target_w` | A WARP charger / external EM does battery management for me, but I set the grid target myself. |
+| `2` `full` | All three: caps as above, plus `GridWSpt` mirrored into **both** grid targets (hard-mode chase). | nothing | An upstream controller is fully in charge of my battery and grid setpoint. |
+
+A few semantic notes:
+
+- **Force-mode is independent of authority.** When `OpMod = 2289` (force charge), the controller commands the battery at `−BatChaMaxW` regardless of authority; when `OpMod = 2290`, it commands `+BatDchgMaxW`. The operator's `max_charge_w` / `max_discharge_w` always clamp the actual write (output saturation), so even in `force_only` mode the operator's caps win over the requested force power.
+- **Caps and grid target are *not* unified.** `caps` applies caps but never overwrites the grid targets, even if WARP sends them. `full` applies both. There is no "grid target only" mode (no realistic use case asked for it).
+- **Watchdog revert** (`modbus_server_watchdog_s`) restores both caps and grid targets from the persistent `config` regardless of authority -- it's about recovering when the Modbus client disappears, not about authority delegation.
 
 ### Inverter feed-in limit caveat
 
@@ -280,10 +292,9 @@ Only effective while `battery_soc < 100`.
   orthogonal to the grid targets: an "unreachable" grid target (e.g.
   `lo = -1000` with `max_charge_w = 100`) is not an error; the controller
   saturates at the limit and the grid balances wherever it ends up.
-- Modbus writes to register `40793` with `modbus_server_use_grid_spt = true`
-  copy `GridWSpt` into **both** targets (hard-mode chase). With the
-  default `modbus_server_use_grid_spt = false`, the operator's grid
-  targets are preserved across Modbus traffic.
+- Modbus writes to register `40793` only update the grid targets in the
+  `full` authority mode; in the default `caps` mode the operator's
+  targets are preserved. See [Modbus authority](#modbus-authority-modbus_server_authority).
 
 ## Controller loop in one diagram
 
