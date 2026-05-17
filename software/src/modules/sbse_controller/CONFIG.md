@@ -57,7 +57,6 @@ identical semantics:
 | `alpha_setpoint_milli` | `700` (= α 0.70) | α × 1000, 10…1000 | **EMA on the commanded battery setpoint** (post-controller, pre-write). Smooths the output to the inverter so noisy grid readings don't produce flickery commands. |
 | `deadband_w` | `50` | W, 0…1000 | **Write-suppression threshold.** If the new computed setpoint is within ±`deadband_w` of the last commanded one, the Modbus write is skipped (inverter holds the last value). Cuts cell churn and bus traffic at idle. SBSE has no internal-control fallback, so generous deadbands are safe. |
 | `safety_zero_after_failures` | `5` | count, 0…100 | **Safety net.** After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters `mode: safety` until reads recover. At default 300 ms tick × 5 → ~1.5 s trip latency. `0` disables the safety net (last setpoint held forever during outages). |
-| `simulation_mode` | `false` | bool | **Simulation mode.** When `true`, the controller runs every cycle exactly as in real operation -- reads, EMAs, P-controller, clamps, deadband -- but skips the actual Modbus write to the inverter. `last_setpoint_w`, `write_ok_count`, the chart and the deadband logic all behave as if the writes had gone out, so you can verify tuning without commanding the battery. The dashboard shows a `SIM` badge and `state.simulation_mode` is exposed for monitoring. |
 
 ## Read-only state (`sbse_controller/state`)
 
@@ -73,7 +72,6 @@ identical semantics:
 | `write_ok_count` | uint32 | Lifetime counter of successful setpoint writes. |
 | `write_err_count` | uint32 | Lifetime counter of failed setpoint writes. |
 | `read_fail_streak` | uint32 | Current run of consecutive failed read cycles; resets on the next successful cycle. |
-| `simulation_mode` | bool | Mirrors `active_config.simulation_mode`. When `true`, the controller is computing setpoints but **not writing them to the inverter**. |
 | `modbus_active` | bool | `true` if a Modbus TCP server write has been applied within the watchdog window. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
 | `modbus_op_mod` | uint16 | Last `OpMod` value received from the Modbus server (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). |
 | `modbus_force_w` | int32 | Battery power currently being commanded under force-mode (`0` when the P controller is running). Negative = charging, positive = discharging. |
