@@ -122,7 +122,12 @@ private:
     bool     enabled            = false;
     millis_t tick_ms            = 300_ms;
     millis_t soc_interval_ms    = 1000_ms;
-    int32_t  target_grid_w      = 0;
+    // Two-target model: see "Grid targets" in CONFIG.md.
+    // lo == hi  -> hard mode: chase the single value in both directions.
+    // lo <  hi  -> soft mode: battery idle in the [lo, hi] grid deadzone;
+    //             outside the deadzone the controller chases the nearer bound.
+    int32_t  grid_charge_target_w    = 0;   // lower bound: charge to reach this
+    int32_t  grid_discharge_target_w = 0;   // upper bound: discharge to reach this
     int32_t  max_charge_w       = 5000;
     int32_t  max_discharge_w    = 5000;
     float    kp                 = 1.0f;
@@ -132,7 +137,6 @@ private:
     int32_t  deadband_w         = 50;
     uint32_t safety_zero_after_failures = 5;  // 0 disables the safety net
     bool     simulation_mode    = false;       // skips actual Modbus writes when true
-    bool     soft_target        = false;       // asymmetric deadzone semantics; see compute_and_write
 
     // SMA Modbus TCP server -- the network/protocol adapter. Its persistent
     // config is mirrored into the controller's cached fields below so the

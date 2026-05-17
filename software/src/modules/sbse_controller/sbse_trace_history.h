@@ -29,10 +29,13 @@ class StringBuilder;
 // loaded dashboard can seed its chart instead of starting from a blank canvas.
 //
 // Wire format of the JSON response:
-//   {"samples": [[age_ms, grid, battery, setpoint, target], ...]}
+//   {"samples": [[age_ms, grid, battery, setpoint, target_lo, target_hi], ...]}
 //
-// age_ms is computed at response time, so the browser can rebase against its
-// own clock without depending on NTP sync between device and browser.
+// target_lo / target_hi are the lower / upper bounds of the grid-target
+// deadzone (`grid_charge_target_w` / `grid_discharge_target_w`). In hard mode
+// (lo == hi) the two render on top of each other. age_ms is computed at
+// response time, so the browser can rebase against its own clock without
+// depending on NTP sync between device and browser.
 class SbseTraceHistory final
 {
 public:
@@ -46,7 +49,8 @@ public:
     // Capture a sample. Called from the controller every tick; the class
     // throttles internally to one sample per SAMPLE_INTERVAL, so a faster
     // tick rate just drops the in-between samples.
-    void add_sample(int32_t grid_w, int32_t battery_w, int32_t setpoint_w, int32_t target_w);
+    void add_sample(int32_t grid_w, int32_t battery_w, int32_t setpoint_w,
+                    int32_t target_lo_w, int32_t target_hi_w);
 
     // Register an HTTP GET handler at the given absolute path. Must be called
     // during register_urls(); the handler captures `this`, so the instance
@@ -59,7 +63,8 @@ private:
         int16_t  grid_w;
         int16_t  battery_w;
         int16_t  setpoint_w;
-        int16_t  target_w;
+        int16_t  target_lo_w;
+        int16_t  target_hi_w;
     };
 
     void format(micros_t now, StringBuilder *sb) const;

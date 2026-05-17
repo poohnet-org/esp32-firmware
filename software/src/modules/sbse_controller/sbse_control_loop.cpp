@@ -330,47 +330,39 @@ void SbseController::compute_and_write()
     //     Output filtering (EMA on setpoint, deadband, SoC clamp) still
     //     applies so a force command can't bypass safety or thrash the bus.
     //
-    // 3b) Soft target: an asymmetric grid deadzone of [min(target, 0), 0]
-    //     in which the battery is held idle. Outside the deadzone the
-    //     controller chases lo_target (when over-exporting) or 0 (when
-    //     importing) -- never the bare target_grid_w on the discharge side.
-    //     This implements the user-visible rule "PV excess covers grid up
-    //     to target_grid_w, then charges battery; if the house out-draws
-    //     PV, discharge to avoid grid import, but no further."
+    // 3b) Two-target deadzone control:
     //
-    // 3c) Hard target (default): P + implicit-I (via battery_w_raw) +
-    //     D-on-measurement, chasing target_grid_w in both directions.
+    //       lo = grid_charge_target_w     (lower bound)
+    //       hi = grid_discharge_target_w  (upper bound, validator: hi >= lo)
+    //
+    //     - lo == hi  -> hard mode: chase the single value in both directions
+    //                    with P + implicit-I + D, identical to the legacy
+    //                    target_grid_w semantics.
+    //     - lo <  hi  -> soft mode: inside the [lo, hi] grid deadzone the
+    //                    battery is commanded idle (raw_setpoint = 0);
+    //                    outside, the controller chases the nearer bound.
+    //                    Direct assignment (not battery_w_raw) so the
+    //                    controller actively converges to 0; the output EMA
+    //                    softens the transition.
     float raw_setpoint;
     if (modbus_force_w != 0) {
         raw_setpoint = static_cast<float>(modbus_force_w);
-    } else if (soft_target) {
-        const float t       = static_cast<float>(target_grid_w);
-        const float lo_thr  = std::min(t, 0.0f);
-        const float hi_thr  = 0.0f;
-        if (ema_grid_w < lo_thr) {
-            // Over-exporting beyond target: charge battery to throttle export.
-            const float delta_w = ema_grid_w - lo_thr;
+    } else {
+        const float lo = static_cast<float>(grid_charge_target_w);
+        const float hi = static_cast<float>(grid_discharge_target_w);
+        if (grid_charge_target_w == grid_discharge_target_w || ema_grid_w < lo) {
+            const float delta_w = ema_grid_w - lo;
             raw_setpoint = static_cast<float>(battery_w_raw)
                          + kp * delta_w
                          + kd * d_grid;
-        } else if (ema_grid_w > hi_thr) {
-            // Would import from grid: discharge battery to cover house load.
-            const float delta_w = ema_grid_w - hi_thr;
+        } else if (ema_grid_w > hi) {
+            const float delta_w = ema_grid_w - hi;
             raw_setpoint = static_cast<float>(battery_w_raw)
                          + kp * delta_w
                          + kd * d_grid;
         } else {
-            // In the deadzone: battery idle. Direct assignment (not battery_w_raw)
-            // so the controller actively converges to 0 even if the battery was
-            // doing something on the previous tick; the output EMA softens the
-            // transition.
             raw_setpoint = 0.0f;
         }
-    } else {
-        const float delta_w = ema_grid_w - static_cast<float>(target_grid_w);
-        raw_setpoint = static_cast<float>(battery_w_raw)
-                     + kp * delta_w
-                     + kd * d_grid;
     }
 
     // 3) SoC limits (only when we have a usable reading).
@@ -409,7 +401,8 @@ void SbseController::compute_and_write()
     state.get("battery_w") ->updateInt(battery_w_raw);
     state.get("battery_soc")->updateUint(soc_pct);
 
-    trace_history.add_sample(lroundf(ema_grid_w), battery_w_raw, last_written_w, target_grid_w);
+    trace_history.add_sample(lroundf(ema_grid_w), battery_w_raw, last_written_w,
+                             grid_charge_target_w, grid_discharge_target_w);
 
     // 7) Deadband. If the new target is within deadband of the last write,
     //    skip the write -- the SBSE holds the last commanded setpoint

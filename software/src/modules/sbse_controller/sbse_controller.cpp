@@ -83,7 +83,8 @@ void SbseController::pre_setup()
         {"port",             Config::Uint16(502)},
         {"tick_ms",          Config::Uint(300, 50, 5000)},
         {"soc_interval_ms",  Config::Uint(1000, 100, 60000)},
-        {"target_grid_w",    Config::Int(0, -10000, 10000)},
+        {"grid_charge_target_w",    Config::Int(0, -10000, 10000)},   // lower bound
+        {"grid_discharge_target_w", Config::Int(0, -10000, 10000)},   // upper bound
         {"max_charge_w",     Config::Uint(5000, 0, 10000)},
         {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
         {"kp_milli",         Config::Uint(1000, 100, 2000)},  // Kp * 1000 in [0.1 .. 2.0]
@@ -97,7 +98,6 @@ void SbseController::pre_setup()
         // true  = soft target (no autonomous discharge to chase a negative
         //                      target; battery idle in the [min(target, 0), 0]
         //                      grid deadzone; discharge only to prevent import).
-        {"soft_target",      Config::Bool(false)},
         // SMA-compatible Modbus TCP server. All four fields are init-only:
         // changing them stops/starts the server but doesn't touch active_config.
         {"modbus_server_enabled",     Config::Bool(false)},
@@ -110,11 +110,14 @@ void SbseController::pre_setup()
         // true: GridWSpt is mirrored into active_config.target_grid_w.
         {"modbus_server_use_grid_spt", Config::Bool(false)},
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
-        // target_grid_w is a setpoint (a desired value), max_charge_w /
-        // max_discharge_w are actuator saturation limits. They're orthogonal:
-        // an "unreachable" target (e.g. +1000 W with max_charge_w = 100) is
-        // not invalid -- the controller just saturates at the limit and the
-        // grid balances wherever it ends up.
+        // The two grid targets define an [lo, hi] deadzone. lo > hi would
+        // mean "discharge to a higher grid value than I'm willing to charge
+        // to" which is degenerate. lo == hi is hard mode; lo < hi is soft.
+        // max_charge_w / max_discharge_w are actuator saturation limits and
+        // remain orthogonal to the targets.
+        if (cfg.get("grid_discharge_target_w")->asInt() < cfg.get("grid_charge_target_w")->asInt()) {
+            return "grid_discharge_target_w must be >= grid_charge_target_w";
+        }
         if (cfg.get("soc_interval_ms")->asUint() < cfg.get("tick_ms")->asUint()) {
             return "soc_interval_ms must be >= tick_ms";
         }
@@ -129,7 +132,8 @@ void SbseController::pre_setup()
     // values are re-seeded from the persistent config above. Use this channel
     // for automation / frequent steering to avoid flash wear.
     active_config = ConfigRoot{Config::Object({
-        {"target_grid_w",    Config::Int(0, -10000, 10000)},
+        {"grid_charge_target_w",    Config::Int(0, -10000, 10000)},
+        {"grid_discharge_target_w", Config::Int(0, -10000, 10000)},
         {"max_charge_w",     Config::Uint(5000, 0, 10000)},
         {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
         {"kp_milli",         Config::Uint(1000, 100, 2000)},
@@ -139,11 +143,13 @@ void SbseController::pre_setup()
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
         {"simulation_mode",  Config::Bool(false)},
-        {"soft_target",      Config::Bool(false)},
-    }), [](Config & /*cfg*/, ConfigSource /*source*/) -> String {
-        // No cross-field constraints. target_grid_w is a setpoint;
-        // max_charge_w / max_discharge_w are saturation limits. Per-field
-        // range constraints are enforced by the Config types themselves.
+    }), [](Config &cfg, ConfigSource /*source*/) -> String {
+        // The two grid targets define an [lo, hi] deadzone. lo > hi would
+        // mean "discharge to a higher grid value than I'm willing to charge
+        // to" which is degenerate.
+        if (cfg.get("grid_discharge_target_w")->asInt() < cfg.get("grid_charge_target_w")->asInt()) {
+            return "grid_discharge_target_w must be >= grid_charge_target_w";
+        }
         return "";
     }};
 
@@ -159,7 +165,6 @@ void SbseController::pre_setup()
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
         {"simulation_mode",   Config::Bool(false)},
-        {"soft_target",       Config::Bool(false)},
         {"modbus_active",     Config::Bool(false)},
         {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
         {"modbus_force_w",    Config::Int32(0)},
@@ -199,7 +204,8 @@ void SbseController::copy_live_tunable_to_active()
     // Mirror the live-tunable subset of the persistent config into the
     // runtime overlay. Called at boot and after a persistent PUT so that
     // both endpoints stay coherent.
-    active_config.get("target_grid_w")          ->updateInt (config.get("target_grid_w")        ->asInt());
+    active_config.get("grid_charge_target_w")   ->updateInt (config.get("grid_charge_target_w")   ->asInt());
+    active_config.get("grid_discharge_target_w")->updateInt (config.get("grid_discharge_target_w")->asInt());
     active_config.get("max_charge_w")           ->updateUint(config.get("max_charge_w")         ->asUint());
     active_config.get("max_discharge_w")        ->updateUint(config.get("max_discharge_w")      ->asUint());
     active_config.get("kp_milli")               ->updateUint(config.get("kp_milli")             ->asUint());
@@ -209,13 +215,13 @@ void SbseController::copy_live_tunable_to_active()
     active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
     active_config.get("safety_zero_after_failures")->updateUint(config.get("safety_zero_after_failures")->asUint());
     active_config.get("simulation_mode")        ->updateBool(config.get("simulation_mode")      ->asBool());
-    active_config.get("soft_target")            ->updateBool(config.get("soft_target")          ->asBool());
 }
 
 void SbseController::apply_runtime_from_active()
 {
     // Refresh the cached fields the hot path reads.
-    target_grid_w   = active_config.get("target_grid_w")->asInt();
+    grid_charge_target_w    = active_config.get("grid_charge_target_w")->asInt();
+    grid_discharge_target_w = active_config.get("grid_discharge_target_w")->asInt();
     max_charge_w    = static_cast<int32_t>(active_config.get("max_charge_w")->asUint());
     max_discharge_w = static_cast<int32_t>(active_config.get("max_discharge_w")->asUint());
     kp              = static_cast<float>(active_config.get("kp_milli")->asUint())             / 1000.0f;
@@ -225,10 +231,8 @@ void SbseController::apply_runtime_from_active()
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
     simulation_mode = active_config.get("simulation_mode")->asBool();
-    soft_target     = active_config.get("soft_target")->asBool();
 
     state.get("simulation_mode")->updateBool(simulation_mode);
-    state.get("soft_target")    ->updateBool(soft_target);
 }
 
 void SbseController::register_urls()
@@ -467,9 +471,13 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
     //
     // GridWSpt is only mirrored when the operator opted in. WARP always
     // sends GridWSpt = 0 in every mode, so the default (off) preserves the
-    // operator's configured target_grid_w across Modbus traffic.
+    // operator's configured grid targets across Modbus traffic. When opted
+    // in, GridWSpt is a single value -- write it to BOTH targets so the P
+    // controller chases it in both directions (hard-mode semantics, matching
+    // what WARP expects from a real SMA inverter).
     if (modbus_server_use_grid_spt) {
-        active_config.get("target_grid_w")->updateInt(target_clamped);
+        active_config.get("grid_charge_target_w")   ->updateInt(target_clamped);
+        active_config.get("grid_discharge_target_w")->updateInt(target_clamped);
     }
     active_config.get("max_charge_w")   ->updateUint(max_charge_clamped);
     active_config.get("max_discharge_w")->updateUint(max_discharge_clamped);
