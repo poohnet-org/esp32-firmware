@@ -99,11 +99,13 @@ void SbseController::pre_setup()
         {"modbus_server_port",        Config::Uint16(502)},
         {"modbus_server_unit_id",     Config::Uint(3, 0, 247)},   // 0 = accept any
         {"modbus_server_watchdog_s",  Config::Uint(60, 0, 3600)},  // 0 disables
-        // false (default): Modbus writes to 40793 leave target_grid_w alone.
-        // WARP always sends GridWSpt = 0, so without this guard a Block /
-        // Normal / Block-* write would always zero the operator's target.
-        // true: GridWSpt is mirrored into active_config.target_grid_w.
-        {"modbus_server_use_grid_spt", Config::Bool(false)},
+        // 0 = ForceOnly -- ignore BatChaMax / BatDchgMax / GridWSpt in
+        //                  active_config; only OpMod-driven force-mode lives.
+        // 1 = Caps      -- apply max_charge_w + max_discharge_w; grid targets
+        //                  preserved. [default]
+        // 2 = Full      -- also mirror GridWSpt into both grid targets.
+        // See ModbusAuthority in sbse_controller.h and CONFIG.md.
+        {"modbus_server_authority",   Config::Uint(1, 0, 2)},
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
         // The two grid targets define an [lo, hi] deadzone. lo > hi would
         // mean "discharge to a higher grid value than I'm willing to charge
@@ -189,7 +191,7 @@ void SbseController::load_init_only_from_config()
     modbus_server_port          = config.get("modbus_server_port")->asUint16();
     modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
     modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
-    modbus_server_use_grid_spt  = config.get("modbus_server_use_grid_spt")->asBool();
+    modbus_server_authority     = static_cast<ModbusAuthority>(config.get("modbus_server_authority")->asUint());
 }
 
 void SbseController::copy_live_tunable_to_active()
@@ -242,13 +244,13 @@ void SbseController::register_urls()
 
         // Refresh Modbus server config. Bounce the listener only if the
         // bind-time fields (enabled / port) actually changed; the rest
-        // (unit_id, watchdog, use_grid_spt) are consulted live and don't
+        // (unit_id, watchdog, authority) are consulted live and don't
         // require a restart.
         modbus_server_enabled       = config.get("modbus_server_enabled")->asBool();
         modbus_server_port          = config.get("modbus_server_port")->asUint16();
         modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
         modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
-        modbus_server_use_grid_spt  = config.get("modbus_server_use_grid_spt")->asBool();
+        modbus_server_authority     = static_cast<ModbusAuthority>(config.get("modbus_server_authority")->asUint());
         if (modbus_server.needs_restart_for(modbus_server_enabled, modbus_server_port)) {
             modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
             modbus_server.restart();
@@ -453,23 +455,27 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
         modbus_force_w = 0;
     }
 
-    // Mutate active_config in place. This auto-publishes via the API event
-    // bus (so MQTT / dashboard see the new values immediately) but skips the
+    // Mutate active_config in place per the configured authority level.
+    // Direct mutation auto-publishes via the API event bus (so MQTT /
+    // dashboard see the new values immediately) but skips the
     // active_config_update command handler -- which would otherwise clear
     // the force-mode state we just set.
     //
-    // GridWSpt is only mirrored when the operator opted in. WARP always
-    // sends GridWSpt = 0 in every mode, so the default (off) preserves the
-    // operator's configured grid targets across Modbus traffic. When opted
-    // in, GridWSpt is a single value -- write it to BOTH targets so the P
-    // controller chases it in both directions (hard-mode semantics, matching
-    // what WARP expects from a real SMA inverter).
-    if (modbus_server_use_grid_spt) {
+    // ModbusAuthority::Caps and above   -> apply both saturation caps.
+    // ModbusAuthority::Full             -> also mirror GridWSpt into both
+    //                                      grid targets (hard-mode chase).
+    // ModbusAuthority::ForceOnly        -> active_config untouched; the
+    //                                      operator's caps / targets stand.
+    //                                      The force_w computed above is the
+    //                                      only effect of this write.
+    if (modbus_server_authority >= ModbusAuthority::Caps) {
+        active_config.get("max_charge_w")   ->updateUint(max_charge_clamped);
+        active_config.get("max_discharge_w")->updateUint(max_discharge_clamped);
+    }
+    if (modbus_server_authority >= ModbusAuthority::Full) {
         active_config.get("grid_charge_target_w")   ->updateInt(target_clamped);
         active_config.get("grid_discharge_target_w")->updateInt(target_clamped);
     }
-    active_config.get("max_charge_w")   ->updateUint(max_charge_clamped);
-    active_config.get("max_discharge_w")->updateUint(max_discharge_clamped);
     apply_runtime_from_active();
 
     last_modbus_write_us = now_us();
