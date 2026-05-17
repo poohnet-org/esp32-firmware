@@ -48,7 +48,7 @@ identical semantics:
 | Field | Default | Units / range | Purpose |
 |---|---:|---|---|
 | `grid_charge_target_w` | `0` | W, −750…+2500 | **Lower grid bound.** When the grid would go below this value (i.e. exporting more than the operator is comfortable with), the controller charges the battery to bring the grid back up to this value. |
-| `grid_discharge_target_w` | `0` | W, −750…+2500, **must be ≥ `grid_charge_target_w`** | **Upper grid bound.** When the grid would go above this value (i.e. importing), the controller discharges the battery to bring the grid back down. Together with `grid_charge_target_w` this defines an `[lo, hi]` *grid deadzone* in which the battery stays idle (`raw_setpoint = 0`). See [Grid targets and the deadzone](#grid-targets-and-the-deadzone) below. |
+| `grid_discharge_target_w` | `0` | W, −750…+2500, **must be ≥ `grid_charge_target_w`** | **Upper grid bound.** When the grid would go above this value (i.e. importing), the controller discharges the battery to bring the grid back down. Together with `grid_charge_target_w` this defines an `[lo, hi]` *grid deadzone* in which the controller stops chasing a target (`delta = 0`); the battery's current action is preserved via the implicit-I feedback. See [Grid targets and the deadzone](#grid-targets-and-the-deadzone) below. |
 | `max_charge_w` | `5000` | W, 0…10 000 | **Battery saturation limit, charge direction.** Hard cap on charging power. The computed setpoint is clamped to `[−max_charge_w, +max_discharge_w]` before being written. `0` disables charging entirely. Orthogonal to the grid targets. |
 | `max_discharge_w` | `5000` | W, 0…10 000 | **Battery saturation limit, discharge direction.** Hard cap on discharging power. `0` disables discharging entirely. Orthogonal to the grid targets. |
 | `kp_milli` | `1000` (= Kp 1.0) | Kp × 1000, 100…2000 | **Proportional controller gain.** Per tick (outside the deadzone): `new_setpoint = battery_now + Kp · (ema_grid − target) + Kd · Δema_grid`, where `target` is whichever bound the controller is chasing. `Kp = 1.0` ≈ "one-shot correction." Lower (~0.5) = slower, more damped. Higher (~1.5) = snappier but can ring against the EMA filter. |
@@ -223,7 +223,7 @@ Per tick the rule is uniform:
 | `ema_grid < lo` (over-exporting beyond `lo`) | charge battery: chase `lo` with P + implicit-I + D |
 | `ema_grid > hi` (importing more than `hi`) | discharge battery: chase `hi` with P + implicit-I + D |
 | `ema_grid ∈ [lo, hi]` and `lo == hi` (hard mode) | chase the single point (`lo == hi`) with the P-controller -- identical to the legacy `target_grid_w` behaviour |
-| `ema_grid ∈ [lo, hi]` and `lo < hi` (soft mode) | **battery idle** (`raw_setpoint = 0`); output EMA softens any ramp from a previous non-zero setpoint |
+| `ema_grid ∈ [lo, hi]` and `lo < hi` (soft mode) | **no target chase** — `delta = 0`, the battery preserves its current action via the implicit-I feedback in `battery_w_raw`. The D term still fires across grid drift, so a fast load step that would push grid out of the deadzone gets anticipated. |
 
 The validator forbids `hi < lo`. The dashboard renders a `HARD` badge when
 `lo == hi` and a `SOFT` badge when `lo < hi`; that is a derived signal,
@@ -313,14 +313,15 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   if modbus_force_w != 0:                          ── SMA OpMod 2289 / 2290
     raw_setpoint = modbus_force_w                  ── (P+D bypassed)
-  elif lo == hi or ema_grid < lo:                  ── hard mode OR over-exporting
-    delta        = ema_grid − lo
-    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
-  elif ema_grid > hi:                              ── importing past hi
-    delta        = ema_grid − hi
-    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
-  else:                                            ── inside deadzone (soft mode only)
-    raw_setpoint = 0                               ── battery idle
+  else:                                            ── unified deadzone P+D
+    effective_target = clamp(ema_grid, lo, hi)     ──   lo  when  ema_grid < lo
+                                                   ──   hi  when  ema_grid > hi
+                                                   ── ema_grid when  ema_grid in [lo, hi]
+                                                   ──            (delta = 0; battery preserves
+                                                   ──             its current action via the
+                                                   ──             implicit-I in battery_now)
+    delta            = ema_grid − effective_target
+    raw_setpoint     = battery_now + Kp · delta + Kd · d_ema_grid
 
   raw_setpoint   = clamp(raw_setpoint, by SoC: 100 % blocks charge, 0 % blocks discharge)
   raw_setpoint   = clamp(raw_setpoint, −max_charge_w, +max_discharge_w)
