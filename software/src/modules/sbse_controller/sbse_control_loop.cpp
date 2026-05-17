@@ -335,34 +335,34 @@ void SbseController::compute_and_write()
     //       lo = grid_charge_target_w     (lower bound)
     //       hi = grid_discharge_target_w  (upper bound, validator: hi >= lo)
     //
-    //     - lo == hi  -> hard mode: chase the single value in both directions
-    //                    with P + implicit-I + D, identical to the legacy
-    //                    target_grid_w semantics.
-    //     - lo <  hi  -> soft mode: inside the [lo, hi] grid deadzone the
-    //                    battery is commanded idle (raw_setpoint = 0);
-    //                    outside, the controller chases the nearer bound.
-    //                    Direct assignment (not battery_w_raw) so the
-    //                    controller actively converges to 0; the output EMA
-    //                    softens the transition.
+    //     The effective target is the operator's grid value *clamped into*
+    //     [lo, hi]:
+    //
+    //       - ema_grid <  lo  -> effective_target = lo  (chase lo, charge)
+    //       - ema_grid >  hi  -> effective_target = hi  (chase hi, discharge)
+    //       - ema_grid in     -> effective_target = ema_grid  (delta = 0)
+    //         the deadzone       so raw_setpoint = battery_w_raw + Kd * d_grid;
+    //                            the implicit-I via battery_w_raw preserves the
+    //                            battery's current action -- no setpoint
+    //                            discontinuity at the deadzone boundary, no
+    //                            knife-edge oscillation when ema_grid noise
+    //                            crosses lo or hi.
+    //
+    //     Hard mode (lo == hi) collapses to chasing the single value: the
+    //     deadzone has zero width so effective_target == lo == hi for any
+    //     ema_grid, and the formula is identical to the legacy single-target
+    //     behaviour.
     float raw_setpoint;
     if (modbus_force_w != 0) {
         raw_setpoint = static_cast<float>(modbus_force_w);
     } else {
         const float lo = static_cast<float>(grid_charge_target_w);
         const float hi = static_cast<float>(grid_discharge_target_w);
-        if (grid_charge_target_w == grid_discharge_target_w || ema_grid_w < lo) {
-            const float delta_w = ema_grid_w - lo;
-            raw_setpoint = static_cast<float>(battery_w_raw)
-                         + kp * delta_w
-                         + kd * d_grid;
-        } else if (ema_grid_w > hi) {
-            const float delta_w = ema_grid_w - hi;
-            raw_setpoint = static_cast<float>(battery_w_raw)
-                         + kp * delta_w
-                         + kd * d_grid;
-        } else {
-            raw_setpoint = 0.0f;
-        }
+        const float effective_target = std::clamp(ema_grid_w, lo, hi);
+        const float delta_w          = ema_grid_w - effective_target;
+        raw_setpoint = static_cast<float>(battery_w_raw)
+                     + kp * delta_w
+                     + kd * d_grid;
     }
 
     // 3) SoC limits (only when we have a usable reading).

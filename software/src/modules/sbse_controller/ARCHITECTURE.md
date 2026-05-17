@@ -184,12 +184,13 @@ compute_and_write()
  │
  │  if modbus_force_w != 0:                (OpMod 2289 / 2290)
  │     raw_setpoint = modbus_force_w       (P + D + deadzone bypassed)
- │  elif lo == hi or ema_grid < lo:        (hard chase OR charging side)
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − lo) + Kd·d_ema_grid
- │  elif ema_grid > hi:                    (discharging side)
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − hi) + Kd·d_ema_grid
- │  else:                                  (inside soft deadzone)
- │     raw_setpoint = 0                    (battery idle; output EMA softens ramp)
+ │  else:
+ │     effective_target = clamp(ema_grid, lo, hi)
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − effective_target) + Kd·d_ema_grid
+ │     # inside [lo, hi]:  effective_target == ema_grid → delta = 0 →
+ │     #                   battery_w_raw is preserved (implicit-I).
+ │     # outside [lo, hi]: effective_target snaps to the nearer bound and
+ │     #                   the P+D terms chase it.
  │
  │  clamp by SoC (100 % blocks charge, 0 % blocks discharge)
  │  clamp by [-max_charge_w, +max_discharge_w]
