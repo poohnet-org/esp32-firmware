@@ -13,8 +13,10 @@ let x = {
             "setpoint": "Setpoint",
             "last_write": "Last write",
             "write_errors": "Write errors",
-            "target_grid_w": "Target net grid",
-            "target_grid_w_help": <>Positive = import from grid. Negative = export to grid. Live update, not persisted to flash.</>,
+            "grid_charge_target_w": "Charge target (lower grid bound)",
+            "grid_charge_target_w_help": <>If the grid would go below this value, the controller charges the battery to bring it back up. Live update, not persisted to flash. Set equal to the discharge target for a hard single-target chase; set lower (e.g. <code>-200 W</code>) than the discharge target for an asymmetric deadzone in which the battery is idle between the two bounds.</>,
+            "grid_discharge_target_w": "Discharge target (upper grid bound)",
+            "grid_discharge_target_w_help": <>If the grid would go above this value, the controller discharges the battery to bring it back down. Live update, not persisted to flash. Must be ≥ charge target. Typical values: <code>0 W</code> (no autonomous grid import) for self-consumption, or any larger value to allow import up to that point before discharging.</>,
             "max_charge_w":  "Max charge power",
             "max_charge_w_help":  <>Upper bound on battery charging power. Live update, not persisted to flash. <code>0</code> disables charging.</>,
             "max_discharge_w": "Max discharge power",
@@ -26,9 +28,9 @@ let x = {
             "mb_badge":  "MB",
             "mb_badge_help_title": "An external Modbus TCP client is currently steering the controller",
             "hard_badge": "HARD",
-            "hard_badge_help_title": "Hard target: controller may discharge to enforce target_grid_w",
+            "hard_badge_help_title": "Hard target: charge and discharge targets are equal; the controller chases that single grid value in both directions.",
             "soft_badge": "SOFT",
-            "soft_badge_help_title": "Soft target: battery stays idle in the [min(target,0), 0] grid deadzone -- never discharges past 0 W grid",
+            "soft_badge_help_title": "Soft target: charge and discharge targets differ. The battery is idle inside the [charge, discharge] grid deadzone; outside, the controller chases the nearer bound.",
 
             "mode_disabled":        "disabled",
             "mode_not_connected":   "not connected",
@@ -44,13 +46,14 @@ let x = {
             "mode_block_discharge": "discharge blocked"
         },
         "chart": {
-            "grid":     "Grid (EMA)",
-            "battery":  "Battery",
-            "setpoint": "Setpoint",
-            "target":   "Target",
-            "time":     "Time",
-            "no_data":  "No samples yet",
-            "loading":  "Collecting samples…"
+            "grid":      "Grid (EMA)",
+            "battery":   "Battery",
+            "setpoint":  "Setpoint",
+            "target_lo": "Charge target",
+            "target_hi": "Discharge target",
+            "time":      "Time",
+            "no_data":   "No samples yet",
+            "loading":   "Collecting samples…"
         },
         "content": {
             "title": "SBSE 5.0 Controller",
@@ -61,10 +64,6 @@ let x = {
             "section_targets":    "Control targets",
             "section_tuning":     "Controller tuning",
             "section_safety":     "Safety",
-
-            "soft_target":      "Soft target",
-            "soft_target_desc": "Don't discharge the battery to chase a negative target_grid_w",
-            "soft_target_help": <>When <strong>off</strong> (default), <code>target_grid_w</code> is a <em>hard</em> setpoint: the controller will discharge the battery if needed to bring the grid to the configured value. When <strong>on</strong>, the controller behaves as follows: excess PV power first flows to the grid up to <code>target_grid_w</code>; any remaining surplus charges the battery. If house load exceeds PV production, the battery discharges only enough to keep the grid at <code>0 W</code> (no import) -- it does not discharge further to push the grid down to a negative <code>target_grid_w</code>. The grid sits inside the <code>[min(target, 0), 0]</code> deadzone whenever the battery can't take or supply more. <em>Positive</em> <code>target_grid_w</code> is treated as <code>0</code> in soft mode (no autonomous grid charging). Force-mode writes from the Modbus TCP server bypass this setting.</>,
 
             "simulation_mode":      "Simulation mode",
             "simulation_mode_desc": "Run the controller without writing to the inverter",
@@ -86,8 +85,11 @@ let x = {
             "soc_interval_ms":      "SoC poll interval",
             "soc_interval_ms_help": <>How often to read the battery SoC. SoC changes slowly; polling it every tick is wasted bandwidth. Must be ≥ tick interval.</>,
 
-            "target_grid_w":      "Target net grid power",
-            "target_grid_w_help": <>The grid power the controller drives toward. Positive = import from grid; negative = export. 0 = pure self-consumption.</>,
+            "grid_charge_target_w":      "Charge target (lower grid bound)",
+            "grid_charge_target_w_help": <>Lower bound of the grid deadzone. When the grid would go below this value (e.g. PV is producing surplus beyond this export setpoint), the controller charges the battery to bring it back up. Set equal to the discharge target for hard single-target chase; set lower for an asymmetric deadzone (soft mode). Typical value for self-consumption: <code>0 W</code>; for "let me export up to 200 W before the battery starts charging": <code>-200 W</code>.</>,
+
+            "grid_discharge_target_w":      "Discharge target (upper grid bound)",
+            "grid_discharge_target_w_help": <>Upper bound of the grid deadzone. When the grid would go above this value (i.e. importing), the controller discharges the battery to bring it back down. Must be ≥ charge target. Typical values: <code>0 W</code> (no autonomous grid import; battery covers any deficit) for self-consumption with a no-import preference; the same value as the charge target for hard-target chase; any larger value to allow some import before discharging kicks in.</>,
 
             "max_charge_w":      "Max charge power",
             "max_charge_w_help": <>Upper bound on battery charging power. 0 forbids charging entirely.</>,

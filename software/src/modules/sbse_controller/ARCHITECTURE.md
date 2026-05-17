@@ -12,7 +12,8 @@ A self-contained ESP32 firmware module that:
    ~300 ms and writing back an active-power setpoint for the battery
    inverter.
 2. Computes that setpoint with a **P + implicit-I + D-on-measurement**
-   control law so the grid follows a user-chosen `target_grid_w`.
+   control law so the grid stays inside a user-chosen `[lo, hi]` deadzone
+   (with `lo == hi` collapsing to single-target chase).
 3. Exposes its full surface (state, config, commands) over **HTTP, MQTT
    and the built-in dashboard** under identical semantics.
 4. Optionally listens for **SMA-compatible Modbus TCP writes** so an
@@ -178,13 +179,17 @@ compute_and_write()
  │  ema_grid       ← α_grid · grid_w_raw + (1 − α_grid) · ema_grid
  │  d_ema_grid     = ema_grid − previous_ema_grid
  │
- │  if modbus_force_w != 0:            (OpMod 2289 / 2290)
- │     raw_setpoint = modbus_force_w   (P + D bypassed; also bypasses soft_target)
- │  elif soft_target:                  (asymmetric deadzone, see CONFIG.md)
- │     # charge to min(target, 0) when over-exporting, discharge to 0 when
- │     # importing, idle in between
- │  else:
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − target_grid_w) + Kd·d_ema_grid
+ │  lo = grid_charge_target_w
+ │  hi = grid_discharge_target_w
+ │
+ │  if modbus_force_w != 0:                (OpMod 2289 / 2290)
+ │     raw_setpoint = modbus_force_w       (P + D + deadzone bypassed)
+ │  elif lo == hi or ema_grid < lo:        (hard chase OR charging side)
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − lo) + Kd·d_ema_grid
+ │  elif ema_grid > hi:                    (discharging side)
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − hi) + Kd·d_ema_grid
+ │  else:                                  (inside soft deadzone)
+ │     raw_setpoint = 0                    (battery idle; output EMA softens ramp)
  │
  │  clamp by SoC (100 % blocks charge, 0 % blocks discharge)
  │  clamp by [-max_charge_w, +max_discharge_w]
@@ -226,11 +231,11 @@ enum class Mode : uint8_t {
 `current_running_mode()` (in `sbse_control_loop.cpp`) picks the right
 mode every tick. It's the only place this logic lives.
 
-**`soft_target` is orthogonal to the Mode enum.** It's a *configuration*
-(stored in `config` / `active_config`, mirrored in `state.soft_target`)
-that changes how `compute_and_write` derives `raw_setpoint`. The mode
-pill still reports `running` / `block_*` / `force_*` / etc.; the
-dashboard renders a separate `HARD` / `SOFT` badge for the setting.
+**Hard vs. soft is derived, not stored.** The dashboard reads
+`grid_charge_target_w` and `grid_discharge_target_w` from `active_config`
+and shows a `HARD` badge if they're equal or a `SOFT` badge if they
+differ. The mode pill (`running` / `block_*` / `force_*` / etc.) is
+orthogonal to that derived signal.
 
 ## State ownership
 
@@ -238,7 +243,7 @@ dashboard renders a separate `HARD` / `SOFT` badge for the setting.
 |---|---|---|
 | `config` (NVS-backed) | `SbseController::config` | HTTP/MQTT `config_update` only |
 | `active_config` | `SbseController::active_config` | HTTP/MQTT/dashboard `active_config_update`, **plus** internal mutations from `apply_modbus_setpoint_block` (the Modbus-driven path bypasses the command handler to avoid clearing its own force-mode state) |
-| Cached fast-path mirrors (`kp`, `kd`, `max_*`, `target_grid_w`, `alpha_*`, `deadband_w`, `simulation_mode`) | `SbseController` members | `apply_runtime_from_active()` after any `active_config` change |
+| Cached fast-path mirrors (`kp`, `kd`, `max_*`, `grid_charge_target_w`, `grid_discharge_target_w`, `alpha_*`, `deadband_w`, `simulation_mode`) | `SbseController` members | `apply_runtime_from_active()` after any `active_config` change |
 | `state` (read-only) | `SbseController::state` | One updater per field, scattered across the cycle. Auto-publishes via the API event bus. |
 | `modbus_op_mod`, `modbus_force_w`, `modbus_active`, `last_modbus_write_us` | `SbseController` members | Modbus dispatch handlers + operator-takeover paths |
 | Modbus server (listener, dispatch state) | `SbseModbusServer` | `configure()` / `start()` / `stop()` from controller |

@@ -13,8 +13,10 @@ let x = {
             "setpoint": "Sollwert",
             "last_write": "Letzter Schreibvorgang",
             "write_errors": "Schreibfehler",
-            "target_grid_w": "Ziel-Netzaustausch",
-            "target_grid_w_help": <>Positiv = Netzbezug. Negativ = Einspeisung. Sofortige Übernahme ohne Flash-Schreibvorgang.</>,
+            "grid_charge_target_w": "Lade-Schwelle (untere Netzgrenze)",
+            "grid_charge_target_w_help": <>Wenn der Netzwert unter diesen Wert fällt, lädt der Regler die Batterie, um ihn wieder anzuheben. Sofortige Übernahme ohne Flash-Schreibvorgang. Identisch mit dem Entlade-Ziel = harte Einzielregelung; niedrigerer Wert = asymmetrisches Totband (Weich-Modus), in dem die Batterie zwischen den beiden Werten ruht.</>,
+            "grid_discharge_target_w": "Entlade-Schwelle (obere Netzgrenze)",
+            "grid_discharge_target_w_help": <>Wenn der Netzwert über diesen Wert steigt, entlädt der Regler die Batterie, um ihn wieder zu senken. Sofortige Übernahme ohne Flash-Schreibvorgang. Muss ≥ Lade-Schwelle sein. Typische Werte: <code>0 W</code> (kein autonomer Netzbezug) für Eigenverbrauch.</>,
             "max_charge_w":  "Max. Ladeleistung",
             "max_charge_w_help":  <>Obergrenze für die Batterieladeleistung. Sofortige Übernahme ohne Flash-Schreibvorgang. <code>0</code> verbietet das Laden.</>,
             "max_discharge_w": "Max. Entladeleistung",
@@ -26,9 +28,9 @@ let x = {
             "mb_badge":  "MB",
             "mb_badge_help_title": "Ein externer Modbus-TCP-Client steuert den Regler aktuell",
             "hard_badge": "HART",
-            "hard_badge_help_title": "Harter Zielwert: Regler darf entladen, um target_grid_w zu erzwingen",
+            "hard_badge_help_title": "Harter Zielwert: Lade- und Entlade-Schwelle sind identisch; der Regler verfolgt diesen einen Netzwert in beide Richtungen.",
             "soft_badge": "WEICH",
-            "soft_badge_help_title": "Weicher Zielwert: Batterie ruht im Netz-Totband [min(Ziel,0), 0] -- entlädt nie über 0 W Netzleistung hinaus",
+            "soft_badge_help_title": "Weicher Zielwert: Lade- und Entlade-Schwelle unterscheiden sich. Die Batterie ruht im Netz-Totband [Lade, Entlade]; außerhalb verfolgt der Regler die nähere Grenze.",
 
             "mode_disabled":        "deaktiviert",
             "mode_not_connected":   "nicht verbunden",
@@ -44,13 +46,14 @@ let x = {
             "mode_block_discharge": "Entladen gesperrt"
         },
         "chart": {
-            "grid":     "Netz (EMA)",
-            "battery":  "Batterie",
-            "setpoint": "Sollwert",
-            "target":   "Ziel",
-            "time":     "Zeit",
-            "no_data":  "Noch keine Messwerte",
-            "loading":  "Sammle Messwerte…"
+            "grid":      "Netz (EMA)",
+            "battery":   "Batterie",
+            "setpoint":  "Sollwert",
+            "target_lo": "Lade-Schwelle",
+            "target_hi": "Entlade-Schwelle",
+            "time":      "Zeit",
+            "no_data":   "Noch keine Messwerte",
+            "loading":   "Sammle Messwerte…"
         },
         "content": {
             "title": "SBSE 5.0 Regler",
@@ -61,10 +64,6 @@ let x = {
             "section_targets":    "Sollwerte",
             "section_tuning":     "Reglerparameter",
             "section_safety":     "Sicherheit",
-
-            "soft_target":      "Weicher Zielwert",
-            "soft_target_desc": "Batterie nicht entladen, um einen negativen target_grid_w zu erreichen",
-            "soft_target_help": <>Wenn <strong>aus</strong> (Standard), ist <code>target_grid_w</code> ein <em>harter</em> Sollwert: Der Regler entlädt die Batterie, falls nötig, um den Netzbezug auf den konfigurierten Wert zu drücken. Wenn <strong>ein</strong>, verhält sich der Regler so: Überschüssige PV-Leistung fließt zuerst ins Netz bis <code>target_grid_w</code>; ein verbleibender Überschuss lädt die Batterie. Übersteigt der Hausverbrauch die PV-Erzeugung, entlädt die Batterie nur so weit, dass das Netz bei <code>0 W</code> bleibt (kein Bezug) -- sie entlädt nicht weiter, um einen negativen <code>target_grid_w</code> zu erzwingen. Der Netzwert ruht im Totband <code>[min(Ziel, 0), 0]</code>, sobald die Batterie weder mehr aufnehmen noch liefern muss. Ein <em>positiver</em> <code>target_grid_w</code> wird im Weich-Modus als <code>0</code> behandelt (kein autonomes Laden aus dem Netz). Force-Mode-Schreibvorgänge vom Modbus-TCP-Server umgehen diese Einstellung.</>,
 
             "simulation_mode":      "Simulationsmodus",
             "simulation_mode_desc": "Regler laufen lassen, ohne in den Wechselrichter zu schreiben",
@@ -86,8 +85,11 @@ let x = {
             "soc_interval_ms":      "SoC-Abfrageintervall",
             "soc_interval_ms_help": <>Wie oft der Batterie-Ladezustand gelesen wird. Der SoC ändert sich langsam; häufige Abfragen sind verschwendete Bandbreite. Muss ≥ Zyklusdauer sein.</>,
 
-            "target_grid_w":      "Ziel-Netzaustauschleistung",
-            "target_grid_w_help": <>Auf welchen Wert die Netzleistung geregelt wird. Positiv = Netzbezug; negativ = Einspeisung. 0 = reiner Eigenverbrauch.</>,
+            "grid_charge_target_w":      "Lade-Schwelle (untere Netzgrenze)",
+            "grid_charge_target_w_help": <>Untere Grenze des Netz-Totbands. Würde der Netzwert unter diesen Wert fallen (z. B. PV-Überschuss über dem konfigurierten Einspeise-Zielwert), lädt der Regler die Batterie und hebt den Netzwert wieder an. Identisch zur Entlade-Schwelle = harte Einzielregelung; niedriger gesetzt (z. B. <code>-200 W</code>) erzeugt ein asymmetrisches Totband im Weich-Modus. Typischer Wert für Eigenverbrauch: <code>0 W</code>.</>,
+
+            "grid_discharge_target_w":      "Entlade-Schwelle (obere Netzgrenze)",
+            "grid_discharge_target_w_help": <>Obere Grenze des Netz-Totbands. Würde der Netzwert über diesen Wert steigen (d. h. Bezug), entlädt der Regler die Batterie und senkt den Netzwert wieder. Muss ≥ Lade-Schwelle sein. Typische Werte: <code>0 W</code> (kein autonomer Netzbezug, die Batterie deckt jegliches Defizit ab) für Eigenverbrauch mit „kein Bezug"-Präferenz; identisch zur Lade-Schwelle für harte Einzielregelung; größerer Wert, um Bezug bis zu dieser Grenze zuzulassen, bevor die Batterie entlädt.</>,
 
             "max_charge_w":      "Max. Ladeleistung",
             "max_charge_w_help": <>Obergrenze für die Batterieladeleistung. 0 verbietet das Laden vollständig.</>,

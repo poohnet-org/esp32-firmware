@@ -4,7 +4,8 @@ export interface config {
     port: number;
     tick_ms: number;
     soc_interval_ms: number;
-    target_grid_w: number;
+    grid_charge_target_w: number;
+    grid_discharge_target_w: number;
     max_charge_w: number;
     max_discharge_w: number;
     kp_milli: number;
@@ -14,7 +15,6 @@ export interface config {
     deadband_w: number;
     safety_zero_after_failures: number;
     simulation_mode: boolean;
-    soft_target: boolean;
     modbus_server_enabled: boolean;
     modbus_server_port: number;
     modbus_server_unit_id: number;
@@ -23,7 +23,8 @@ export interface config {
 }
 
 export interface active_config {
-    target_grid_w: number;
+    grid_charge_target_w: number;
+    grid_discharge_target_w: number;
     max_charge_w: number;
     max_discharge_w: number;
     kp_milli: number;
@@ -33,7 +34,6 @@ export interface active_config {
     deadband_w: number;
     safety_zero_after_failures: number;
     simulation_mode: boolean;
-    soft_target: boolean;
 }
 
 export interface state {
@@ -48,7 +48,6 @@ export interface state {
     write_err_count: number;
     read_fail_streak: number;
     simulation_mode: boolean;
-    soft_target: boolean;
     modbus_active: boolean;
     modbus_op_mod: number;
     modbus_force_w: number;
