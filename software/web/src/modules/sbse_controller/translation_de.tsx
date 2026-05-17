@@ -25,6 +25,10 @@ let x = {
             "sim_badge": "SIM",
             "mb_badge":  "MB",
             "mb_badge_help_title": "Ein externer Modbus-TCP-Client steuert den Regler aktuell",
+            "hard_badge": "HART",
+            "hard_badge_help_title": "Harter Zielwert: Regler darf entladen, um target_grid_w zu erzwingen",
+            "soft_badge": "WEICH",
+            "soft_badge_help_title": "Weicher Zielwert: Batterie ruht im Netz-Totband [min(Ziel,0), 0] -- entlädt nie über 0 W Netzleistung hinaus",
 
             "mode_disabled":        "deaktiviert",
             "mode_not_connected":   "nicht verbunden",
@@ -57,6 +61,10 @@ let x = {
             "section_targets":    "Sollwerte",
             "section_tuning":     "Reglerparameter",
             "section_safety":     "Sicherheit",
+
+            "soft_target":      "Weicher Zielwert",
+            "soft_target_desc": "Batterie nicht entladen, um einen negativen target_grid_w zu erreichen",
+            "soft_target_help": <>Wenn <strong>aus</strong> (Standard), ist <code>target_grid_w</code> ein <em>harter</em> Sollwert: Der Regler entlädt die Batterie, falls nötig, um den Netzbezug auf den konfigurierten Wert zu drücken. Wenn <strong>ein</strong>, verhält sich der Regler so: Überschüssige PV-Leistung fließt zuerst ins Netz bis <code>target_grid_w</code>; ein verbleibender Überschuss lädt die Batterie. Übersteigt der Hausverbrauch die PV-Erzeugung, entlädt die Batterie nur so weit, dass das Netz bei <code>0 W</code> bleibt (kein Bezug) -- sie entlädt nicht weiter, um einen negativen <code>target_grid_w</code> zu erzwingen. Der Netzwert ruht im Totband <code>[min(Ziel, 0), 0]</code>, sobald die Batterie weder mehr aufnehmen noch liefern muss. Ein <em>positiver</em> <code>target_grid_w</code> wird im Weich-Modus als <code>0</code> behandelt (kein autonomes Laden aus dem Netz). Force-Mode-Schreibvorgänge vom Modbus-TCP-Server umgehen diese Einstellung.</>,
 
             "simulation_mode":      "Simulationsmodus",
             "simulation_mode_desc": "Regler laufen lassen, ohne in den Wechselrichter zu schreiben",

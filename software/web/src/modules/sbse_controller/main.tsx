@@ -296,6 +296,14 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
                         <div class="d-flex align-items-center gap-2">
+                            <span class={`badge bg-${st.soft_target ? "info" : "secondary"} sbse-mode-pill`}
+                                  title={st.soft_target
+                                         ? __("sbse_controller.status.soft_badge_help_title")
+                                         : __("sbse_controller.status.hard_badge_help_title")}>
+                                {st.soft_target
+                                 ? __("sbse_controller.status.soft_badge")
+                                 : __("sbse_controller.status.hard_badge")}
+                            </span>
                             {st.modbus_active ?
                                 <span class="badge bg-primary sbse-mode-pill"
                                       title={__("sbse_controller.status.mb_badge_help_title")}>
@@ -545,6 +553,13 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                     </FormRow>
 
                     <FormSeparator heading={__("sbse_controller.content.section_mode")}/>
+
+                    <FormRow label={__("sbse_controller.content.soft_target")}
+                             help={__("sbse_controller.content.soft_target_help")}>
+                        <Switch desc={__("sbse_controller.content.soft_target_desc")}
+                                checked={state.soft_target}
+                                onClick={this.toggle("soft_target")}/>
+                    </FormRow>
 
                     <FormRow label={__("sbse_controller.content.simulation_mode")}
                              help={__("sbse_controller.content.simulation_mode_help")}>

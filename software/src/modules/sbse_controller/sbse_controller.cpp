@@ -93,6 +93,11 @@ void SbseController::pre_setup()
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},  // 0 disables
         {"simulation_mode",  Config::Bool(false)},
+        // false = hard target (controller may discharge to enforce target_grid_w);
+        // true  = soft target (no autonomous discharge to chase a negative
+        //                      target; battery idle in the [min(target, 0), 0]
+        //                      grid deadzone; discharge only to prevent import).
+        {"soft_target",      Config::Bool(false)},
         // SMA-compatible Modbus TCP server. All four fields are init-only:
         // changing them stops/starts the server but doesn't touch active_config.
         {"modbus_server_enabled",     Config::Bool(false)},
@@ -134,6 +139,7 @@ void SbseController::pre_setup()
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
         {"simulation_mode",  Config::Bool(false)},
+        {"soft_target",      Config::Bool(false)},
     }), [](Config & /*cfg*/, ConfigSource /*source*/) -> String {
         // No cross-field constraints. target_grid_w is a setpoint;
         // max_charge_w / max_discharge_w are saturation limits. Per-field
@@ -153,6 +159,7 @@ void SbseController::pre_setup()
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
         {"simulation_mode",   Config::Bool(false)},
+        {"soft_target",       Config::Bool(false)},
         {"modbus_active",     Config::Bool(false)},
         {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
         {"modbus_force_w",    Config::Int32(0)},
@@ -202,6 +209,7 @@ void SbseController::copy_live_tunable_to_active()
     active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
     active_config.get("safety_zero_after_failures")->updateUint(config.get("safety_zero_after_failures")->asUint());
     active_config.get("simulation_mode")        ->updateBool(config.get("simulation_mode")      ->asBool());
+    active_config.get("soft_target")            ->updateBool(config.get("soft_target")          ->asBool());
 }
 
 void SbseController::apply_runtime_from_active()
@@ -217,8 +225,10 @@ void SbseController::apply_runtime_from_active()
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
     simulation_mode = active_config.get("simulation_mode")->asBool();
+    soft_target     = active_config.get("soft_target")->asBool();
 
     state.get("simulation_mode")->updateBool(simulation_mode);
+    state.get("soft_target")    ->updateBool(soft_target);
 }
 
 void SbseController::register_urls()

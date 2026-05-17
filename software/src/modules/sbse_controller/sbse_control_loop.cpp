@@ -330,10 +330,42 @@ void SbseController::compute_and_write()
     //     Output filtering (EMA on setpoint, deadband, SoC clamp) still
     //     applies so a force command can't bypass safety or thrash the bus.
     //
-    // 3b) Otherwise: P + implicit-I (via battery_w_raw) + D-on-measurement.
+    // 3b) Soft target: an asymmetric grid deadzone of [min(target, 0), 0]
+    //     in which the battery is held idle. Outside the deadzone the
+    //     controller chases lo_target (when over-exporting) or 0 (when
+    //     importing) -- never the bare target_grid_w on the discharge side.
+    //     This implements the user-visible rule "PV excess covers grid up
+    //     to target_grid_w, then charges battery; if the house out-draws
+    //     PV, discharge to avoid grid import, but no further."
+    //
+    // 3c) Hard target (default): P + implicit-I (via battery_w_raw) +
+    //     D-on-measurement, chasing target_grid_w in both directions.
     float raw_setpoint;
     if (modbus_force_w != 0) {
         raw_setpoint = static_cast<float>(modbus_force_w);
+    } else if (soft_target) {
+        const float t       = static_cast<float>(target_grid_w);
+        const float lo_thr  = std::min(t, 0.0f);
+        const float hi_thr  = 0.0f;
+        if (ema_grid_w < lo_thr) {
+            // Over-exporting beyond target: charge battery to throttle export.
+            const float delta_w = ema_grid_w - lo_thr;
+            raw_setpoint = static_cast<float>(battery_w_raw)
+                         + kp * delta_w
+                         + kd * d_grid;
+        } else if (ema_grid_w > hi_thr) {
+            // Would import from grid: discharge battery to cover house load.
+            const float delta_w = ema_grid_w - hi_thr;
+            raw_setpoint = static_cast<float>(battery_w_raw)
+                         + kp * delta_w
+                         + kd * d_grid;
+        } else {
+            // In the deadzone: battery idle. Direct assignment (not battery_w_raw)
+            // so the controller actively converges to 0 even if the battery was
+            // doing something on the previous tick; the output EMA softens the
+            // transition.
+            raw_setpoint = 0.0f;
+        }
     } else {
         const float delta_w = ema_grid_w - static_cast<float>(target_grid_w);
         raw_setpoint = static_cast<float>(battery_w_raw)
