@@ -57,6 +57,7 @@ identical semantics:
 | `deadband_w` | `50` | W, 0…1000 | **Write-suppression threshold.** If the new computed setpoint is within ±`deadband_w` of the last commanded one, the Modbus write is skipped (inverter holds the last value). Cuts cell churn and bus traffic at idle. SBSE has no internal-control fallback, so generous deadbands are safe. |
 | `safety_zero_after_failures` | `5` | count, 0…100 | **Safety net.** After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters `mode: safety` until reads recover. At default 300 ms tick × 5 → ~1.5 s trip latency. `0` disables the safety net (last setpoint held forever during outages). |
 | `simulation_mode` | `false` | bool | **Simulation mode.** When `true`, the controller runs every cycle exactly as in real operation -- reads, EMAs, P-controller, clamps, deadband -- but skips the actual Modbus write to the inverter. `last_setpoint_w`, `write_ok_count`, the chart and the deadband logic all behave as if the writes had gone out, so you can verify tuning without commanding the battery. The dashboard shows a `SIM` badge and `state.simulation_mode` is exposed for monitoring. |
+| `soft_target` | `false` | bool | **Hard / soft target semantics.** When `false` (default), `target_grid_w` is a *hard* setpoint and the controller will discharge the battery if needed to chase it in both directions. When `true`, see [Soft target semantics](#soft-target-semantics) below. The dashboard shows a `HARD` / `SOFT` badge accordingly. |
 
 ## Read-only state (`sbse_controller/state`)
 
@@ -73,6 +74,7 @@ identical semantics:
 | `write_err_count` | uint32 | Lifetime counter of failed setpoint writes. |
 | `read_fail_streak` | uint32 | Current run of consecutive failed read cycles; resets on the next successful cycle. |
 | `simulation_mode` | bool | Mirrors `active_config.simulation_mode`. When `true`, the controller is computing setpoints but **not writing them to the inverter**. |
+| `soft_target` | bool | Mirrors `active_config.soft_target`. See [Soft target semantics](#soft-target-semantics). |
 | `modbus_active` | bool | `true` if a Modbus TCP server write has been applied within the watchdog window. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
 | `modbus_op_mod` | uint16 | Last `OpMod` value received from the Modbus server (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). |
 | `modbus_force_w` | int32 | Battery power currently being commanded under force-mode (`0` when the P controller is running). Negative = charging, positive = discharging. |
@@ -192,6 +194,46 @@ c.close()
 
 To release: write `OpMod = 2424` then `40793` with all-zeros (or non-zero `BatChaMaxW` / `BatDchgMaxW` for normal P-controller operation under those caps), or just send any `active_config` change from the dashboard.
 
+## Soft target semantics
+
+When `active_config.soft_target = true`, the P controller stops chasing
+`target_grid_w` symmetrically. Instead it implements an **asymmetric
+deadzone on the grid value**:
+
+- If the grid would end up **more negative than `min(target, 0)`**
+  (over-exporting beyond the configured target) → charge the battery to
+  bring the grid up to `min(target, 0)`.
+- If the grid would end up **more positive than `0`** (would import) →
+  discharge the battery to bring the grid down to `0` (and no further --
+  the controller does **not** discharge to push the grid all the way to
+  a negative `target_grid_w`).
+- If the grid is in the deadzone `[min(target, 0), 0]` → battery is
+  commanded to `0 W`. The output EMA softens the transition; the inverter
+  may still ramp gently from a previous non-zero setpoint.
+
+User intent: "excess PV first goes to the grid up to my configured target,
+the rest charges the battery; if the house out-draws PV, the battery
+discharges only enough to avoid grid import."
+
+### Examples (`target_grid_w = −200 W`)
+
+| Grid without battery action | Hard mode (`soft_target = false`) | Soft mode (`soft_target = true`) |
+|---|---|---|
+| `−500 W` (PV excess of 500) | charge 300 W → grid `−200` | charge 300 W → grid `−200` *(identical)* |
+| `−100 W` (PV excess of 100) | discharge 100 W → grid `−200` | **battery idle → grid `−100`** *(no over-export-hunt)* |
+| `0 W` | discharge 200 W → grid `−200` | **battery idle → grid `0`** |
+| `+500 W` (PV deficit of 500) | discharge 700 W → grid `−200` | **discharge 500 W → grid `0`** *(cover load, no further)* |
+
+### Restrictions
+
+- A **positive** `target_grid_w` is treated as `0` in soft mode (no
+  autonomous grid charging). To intentionally import from the grid,
+  switch back to hard mode.
+- Modbus force-mode (`OpMod 2289` / `2290`) **bypasses** soft mode --
+  external force commands are explicit overrides and take precedence.
+- Other clamps (`max_charge_w`, `max_discharge_w`, SoC limits, output EMA,
+  deadband, safety-zero) all apply unchanged on top of the soft logic.
+
 ## Controller loop in one diagram
 
 ```
@@ -206,7 +248,12 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   if modbus_force_w != 0:                          ── SMA OpMod 2289 / 2290
     raw_setpoint = modbus_force_w                  ── (P+D bypassed)
-  else:
+  elif soft_target:                                ── asymmetric deadzone
+    lo = min(target_grid_w, 0)
+    if   ema_grid < lo:   delta = ema_grid − lo  ; raw_setpoint = battery_now + Kp·delta + Kd·d_ema_grid
+    elif ema_grid > 0 :   delta = ema_grid       ; raw_setpoint = battery_now + Kp·delta + Kd·d_ema_grid
+    else              :   raw_setpoint = 0       ── battery idle in deadzone
+  else:                                            ── hard target
     delta        = ema_grid − target_grid_w
     raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
 
@@ -235,7 +282,8 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 | Cap how hard the battery can work | `max_charge_w` / `max_discharge_w` | Lower the relevant cap; `0` disables that direction entirely. |
 | Pure self-consumption | `target_grid_w` | `0` (default). |
 | Dump excess to grid | `target_grid_w` | Negative value (e.g. `−200`). |
-| Charge from grid (low tariff) | `target_grid_w` | Positive value; only effective while `battery_soc < 100`. |
+| Charge from grid (low tariff) | `target_grid_w` | Positive value; only effective while `battery_soc < 100`. Requires `soft_target = false` (positive targets are treated as `0` in soft mode). |
+| "PV-only" battery use (never discharge to chase a negative target) | `soft_target` | `true`. Battery still discharges to cover load, but stops at grid `= 0` instead of overshooting toward a negative target. |
 | Battery keeps its last setpoint during a Modbus outage | `safety_zero_after_failures` | Set to `0` (disables the safety-zero trip). |
 
 ## Useful curl examples

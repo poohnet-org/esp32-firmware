@@ -25,6 +25,10 @@ let x = {
             "sim_badge": "SIM",
             "mb_badge":  "MB",
             "mb_badge_help_title": "An external Modbus TCP client is currently steering the controller",
+            "hard_badge": "HARD",
+            "hard_badge_help_title": "Hard target: controller may discharge to enforce target_grid_w",
+            "soft_badge": "SOFT",
+            "soft_badge_help_title": "Soft target: battery stays idle in the [min(target,0), 0] grid deadzone -- never discharges past 0 W grid",
 
             "mode_disabled":        "disabled",
             "mode_not_connected":   "not connected",
@@ -57,6 +61,10 @@ let x = {
             "section_targets":    "Control targets",
             "section_tuning":     "Controller tuning",
             "section_safety":     "Safety",
+
+            "soft_target":      "Soft target",
+            "soft_target_desc": "Don't discharge the battery to chase a negative target_grid_w",
+            "soft_target_help": <>When <strong>off</strong> (default), <code>target_grid_w</code> is a <em>hard</em> setpoint: the controller will discharge the battery if needed to bring the grid to the configured value. When <strong>on</strong>, the controller behaves as follows: excess PV power first flows to the grid up to <code>target_grid_w</code>; any remaining surplus charges the battery. If house load exceeds PV production, the battery discharges only enough to keep the grid at <code>0 W</code> (no import) -- it does not discharge further to push the grid down to a negative <code>target_grid_w</code>. The grid sits inside the <code>[min(target, 0), 0]</code> deadzone whenever the battery can't take or supply more. <em>Positive</em> <code>target_grid_w</code> is treated as <code>0</code> in soft mode (no autonomous grid charging). Force-mode writes from the Modbus TCP server bypass this setting.</>,
 
             "simulation_mode":      "Simulation mode",
             "simulation_mode_desc": "Run the controller without writing to the inverter",

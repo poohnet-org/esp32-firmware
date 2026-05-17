@@ -179,7 +179,10 @@ compute_and_write()
  │  d_ema_grid     = ema_grid − previous_ema_grid
  │
  │  if modbus_force_w != 0:            (OpMod 2289 / 2290)
- │     raw_setpoint = modbus_force_w   (P + D bypassed)
+ │     raw_setpoint = modbus_force_w   (P + D bypassed; also bypasses soft_target)
+ │  elif soft_target:                  (asymmetric deadzone, see CONFIG.md)
+ │     # charge to min(target, 0) when over-exporting, discharge to 0 when
+ │     # importing, idle in between
  │  else:
  │     raw_setpoint = battery_w_raw + Kp·(ema_grid − target_grid_w) + Kd·d_ema_grid
  │
@@ -222,6 +225,12 @@ enum class Mode : uint8_t {
 
 `current_running_mode()` (in `sbse_control_loop.cpp`) picks the right
 mode every tick. It's the only place this logic lives.
+
+**`soft_target` is orthogonal to the Mode enum.** It's a *configuration*
+(stored in `config` / `active_config`, mirrored in `state.soft_target`)
+that changes how `compute_and_write` derives `raw_setpoint`. The mode
+pill still reports `running` / `block_*` / `force_*` / etc.; the
+dashboard renders a separate `HARD` / `SOFT` badge for the setting.
 
 ## State ownership
 
