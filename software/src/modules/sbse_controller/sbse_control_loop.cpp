@@ -288,9 +288,9 @@ void SbseController::read_soc()
 
 void SbseController::compute_and_write()
 {
-    // If a pause was requested mid-cycle (e.g. force_release fired between
-    // reads and write), drop the write -- the release write has already gone
-    // out and we don't want to immediately overwrite it.
+    // If a pause was requested mid-cycle (e.g. the pause command fired
+    // between reads and write), drop the write -- the 0 W write has
+    // already gone out and we don't want to immediately overwrite it.
     if (paused) {
         finish_cycle(Mode::Paused);
         return;
@@ -473,12 +473,12 @@ void SbseController::send_setpoint(int32_t watts)
     });
 }
 
-void SbseController::send_release()
+void SbseController::send_zero_w()
 {
     // Zero-setpoint write. The SBSE has no auto-fallback to internal control,
     // so it will hold this 0 W command until either we issue a new setpoint
     // or the operator switches the inverter back to internal control. Used
-    // by `force_release` (operator-driven pause) and `pre_reboot` (so we
+    // by the `pause` command (operator-driven pause) and `pre_reboot` (so we
     // don't leave a stale active setpoint commanding the battery).
     //
     // In simulation mode we skip the actual write but the operator-visible

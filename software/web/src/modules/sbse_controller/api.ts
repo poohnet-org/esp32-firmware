@@ -54,7 +54,7 @@ export interface state {
     last_error: string;
 }
 
-export interface force_release {
+export interface pause {
 }
 
 export interface resume {

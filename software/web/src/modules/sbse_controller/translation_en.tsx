@@ -22,8 +22,8 @@ let x = {
             "max_discharge_w": "Max discharge power",
             "max_discharge_w_help": <>Upper bound on battery discharging power. Live update, not persisted to flash. <code>0</code> disables discharging.</>,
             "apply": "Apply",
-            "force_release": "Pause 30 s (0 W)",
-            "resume":        "Resume",
+            "pause":  "Pause 30 s (0 W)",
+            "resume": "Resume",
             "sim_badge": "SIM",
             "mb_badge":  "MB",
             "mb_badge_help_title": "An external Modbus TCP client is currently steering the controller",
@@ -132,7 +132,7 @@ let x = {
         "script": {
             "save_failed":          "Failed to save the SBSE controller settings",
             "save_active_failed":   "Failed to apply the live override",
-            "force_release_failed": "Failed to trigger force_release",
+            "pause_failed":        "Failed to pause the controller",
             "resume_failed":        "Failed to resume the controller"
         }
     }

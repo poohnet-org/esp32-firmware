@@ -29,13 +29,13 @@
 #include "gcc_warnings.h"
 
 // ---------------------------------------------------------------------------
-// How long `force_release` keeps the loop paused. Note: the SBSE does NOT
-// auto-revert to internal control when external setpoints stop arriving --
-// it is configured for one mode or the other. So this is a UX timeout for
-// the operator, not an inverter-watchdog window.
+// How long the `pause` command keeps the loop paused. Note: the SBSE does
+// NOT auto-revert to internal control when external setpoints stop arriving
+// -- it is configured for one mode or the other. So this is a UX timeout
+// for the operator, not an inverter-watchdog window.
 // ---------------------------------------------------------------------------
 
-static constexpr micros_t FORCE_RELEASE_HOLD         = 30_s;
+static constexpr micros_t PAUSE_DURATION             = 30_s;
 
 // ---------------------------------------------------------------------------
 // SMA OpMod values latched into modbus_op_mod and consulted from the setpoint
@@ -296,10 +296,10 @@ void SbseController::register_urls()
     // dashboard can seed its chart instead of starting from a blank canvas.
     trace_history.register_url("/sbse_controller/history");
 
-    api.addCommand("sbse_controller/force_release", Config::Null(), {},
+    api.addCommand("sbse_controller/pause", Config::Null(), {},
                    [this](Language /*language*/, String &/*errmsg*/) {
         paused       = true;
-        paused_until = now_us() + FORCE_RELEASE_HOLD;
+        paused_until = now_us() + PAUSE_DURATION;
         // Operator takeover: drop any Modbus force-mode state too.
         modbus_force_w = 0;
         modbus_op_mod  = SMA_OPMOD_DEFAULT;
@@ -307,10 +307,10 @@ void SbseController::register_urls()
         state.get("modbus_active")->updateBool(false);
         state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
         state.get("modbus_force_w")->updateInt(0);
-        send_release();
+        send_zero_w();
         publish_mode(Mode::Paused);
-        logger.printfln("force_release: pausing setpoint loop for %lld s",
-                        static_cast<long long>(FORCE_RELEASE_HOLD.to<seconds_t>().t));
+        logger.printfln("pause: holding setpoint loop at 0 W for %lld s",
+                        static_cast<long long>(PAUSE_DURATION.to<seconds_t>().t));
     }, true);
 
     api.addCommand("sbse_controller/resume", Config::Null(), {},
@@ -320,7 +320,7 @@ void SbseController::register_urls()
         }
         paused       = false;
         paused_until = -1_us;
-        // Operator takeover. (Idempotent if already cleared by force_release.)
+        // Operator takeover. (Idempotent if already cleared by pause.)
         modbus_force_w = 0;
         modbus_op_mod  = SMA_OPMOD_DEFAULT;
         modbus_active  = false;
@@ -386,7 +386,7 @@ void SbseController::pre_reboot()
     // Best-effort 0 W write so the inverter isn't left holding a stale
     // active setpoint across our reboot. Fire-and-forget; the connection
     // may already be down.
-    send_release();
+    send_zero_w();
     stop_connection();
 }
 
