@@ -186,8 +186,8 @@ function LiveRangeSliderRow(props: {
                 || props.pending_hi !== props.current_hi;
     return (
         <FormRow label={props.label} help={props.help}>
-            <div class="d-flex gap-2 align-items-center">
-                <div class="sbse-range-slider flex-grow-1">
+            <div class="d-flex flex-column gap-2">
+                <div class="sbse-range-slider">
                     <div class="sbse-range-track"/>
                     <div class="sbse-range-active"
                          style={`left:${lo_pct}%;right:${100 - hi_pct}%`}/>
@@ -208,26 +208,26 @@ function LiveRangeSliderRow(props: {
                                props.onValueHi(Math.max(v, props.pending_lo));
                            }}/>
                 </div>
-                <div class="d-flex gap-1 align-items-center" style="min-width: 14em;">
-                    <div style="width: 6em;">
+                <div class="d-flex gap-2 align-items-center justify-content-end">
+                    <div style="min-width: 9em;">
                         <InputNumber unit="W"
                                      min={props.min} max={props.pending_hi}
                                      value={props.pending_lo}
                                      onValue={props.onValueLo}/>
                     </div>
                     <span>…</span>
-                    <div style="width: 6em;">
+                    <div style="min-width: 9em;">
                         <InputNumber unit="W"
                                      min={props.pending_lo} max={props.max}
                                      value={props.pending_hi}
                                      onValue={props.onValueHi}/>
                     </div>
+                    <Button variant="primary"
+                            disabled={!dirty}
+                            onClick={props.onApply}>
+                        {__("sbse_controller.status.apply")}
+                    </Button>
                 </div>
-                <Button variant="primary"
-                        disabled={!dirty}
-                        onClick={props.onApply}>
-                    {__("sbse_controller.status.apply")}
-                </Button>
             </div>
         </FormRow>
     );
@@ -451,9 +451,9 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                         <LiveRangeSliderRow
                             label={__("sbse_controller.status.grid_target_range")}
                             help={__("sbse_controller.status.grid_target_range_help")}
-                            min={-10000}
-                            max={10000}
-                            step={50}
+                            min={-750}
+                            max={2500}
+                            step={10}
                             pending_lo={this.state.pending.grid_charge_target_w}
                             pending_hi={this.state.pending.grid_discharge_target_w}
                             current_lo={ac.grid_charge_target_w}
