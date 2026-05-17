@@ -325,12 +325,6 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                                     <span class="ms-1">{__("sbse_controller.status.mb_badge")}</span>
                                 </span>
                             : null}
-                            {st.simulation_mode ?
-                                <span class="badge bg-info sbse-mode-pill">
-                                    <AlertTriangle size={14}/>
-                                    <span class="ms-1">{__("sbse_controller.status.sim_badge")}</span>
-                                </span>
-                            : null}
                             <ModeBadge mode={st.mode}/>
                         </div>
                     </div>
@@ -580,15 +574,6 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                         <InputNumber min={1} max={65535} value={state.port} onValue={this.set("port")}/>
                     </FormRow>
 
-                    <FormSeparator heading={__("sbse_controller.content.section_mode")}/>
-
-                    <FormRow label={__("sbse_controller.content.simulation_mode")}
-                             help={__("sbse_controller.content.simulation_mode_help")}>
-                        <Switch desc={__("sbse_controller.content.simulation_mode_desc")}
-                                checked={state.simulation_mode}
-                                onClick={this.toggle("simulation_mode")}/>
-                    </FormRow>
-
                     <FormSeparator heading={__("sbse_controller.content.section_timing")}/>
 
                     <FormRow label={__("sbse_controller.content.tick_ms")}
@@ -757,38 +742,36 @@ function build_status(): StatusResult | null {
         return null;
     }
 
-    const sim_suffix = st.simulation_mode ? ` (${__("sbse_controller.status.sim_badge")})` : "";
-
     switch (st.mode) {
         case "disabled":
             return {
                 status: ModuleStatus.Disabled,
-                text:   () => mode_label(st.mode) + sim_suffix,
+                text:   () => mode_label(st.mode),
             };
         case "running":
             return {
-                status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
+                status: ModuleStatus.Ok,
                 text:   () => {
                     const lo = ac.grid_charge_target_w;
                     const hi = ac.grid_discharge_target_w;
                     const target_text = lo === hi
                         ? `${fmt_w(lo)} W`
                         : `${fmt_w(lo)}…${fmt_w(hi)} W`;
-                    return `${fmt_w(st.grid_w_ema)} W → ${target_text}` + sim_suffix;
+                    return `${fmt_w(st.grid_w_ema)} W → ${target_text}`;
                 },
             };
         case "force_charge":
         case "force_discharge":
             return {
-                status: st.simulation_mode ? ModuleStatus.Warning : ModuleStatus.Ok,
-                text:   () => `${mode_label(st.mode)} ${fmt_w(st.modbus_force_w)} W` + sim_suffix,
+                status: ModuleStatus.Ok,
+                text:   () => `${mode_label(st.mode)} ${fmt_w(st.modbus_force_w)} W`,
             };
         case "blocked":
         case "block_charge":
         case "block_discharge":
             return {
                 status: ModuleStatus.Warning,
-                text:   () => `${mode_label(st.mode)} -- ${fmt_w(st.grid_w_ema)} W` + sim_suffix,
+                text:   () => `${mode_label(st.mode)} -- ${fmt_w(st.grid_w_ema)} W`,
             };
         case "stale":
         case "paused":
@@ -797,7 +780,7 @@ function build_status(): StatusResult | null {
                 status: ModuleStatus.Warning,
                 text:   () => (st.last_error && st.last_error.length > 0
                               ? st.last_error
-                              : mode_label(st.mode)) + sim_suffix,
+                              : mode_label(st.mode)),
             };
         case "safety":
         case "faulted":
@@ -805,12 +788,12 @@ function build_status(): StatusResult | null {
                 status: ModuleStatus.Error,
                 text:   () => (st.last_error && st.last_error.length > 0
                               ? st.last_error
-                              : mode_label(st.mode)) + sim_suffix,
+                              : mode_label(st.mode)),
             };
         default:
             return {
                 status: ModuleStatus.Warning,
-                text:   () => mode_label(st.mode) + sim_suffix,
+                text:   () => mode_label(st.mode),
             };
     }
 }

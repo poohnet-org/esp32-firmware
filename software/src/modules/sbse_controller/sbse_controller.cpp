@@ -93,11 +93,6 @@ void SbseController::pre_setup()
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},  // 0 disables
-        {"simulation_mode",  Config::Bool(false)},
-        // false = hard target (controller may discharge to enforce target_grid_w);
-        // true  = soft target (no autonomous discharge to chase a negative
-        //                      target; battery idle in the [min(target, 0), 0]
-        //                      grid deadzone; discharge only to prevent import).
         // SMA-compatible Modbus TCP server. All four fields are init-only:
         // changing them stops/starts the server but doesn't touch active_config.
         {"modbus_server_enabled",     Config::Bool(false)},
@@ -142,7 +137,6 @@ void SbseController::pre_setup()
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
-        {"simulation_mode",  Config::Bool(false)},
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
         // The two grid targets define an [lo, hi] deadzone. lo > hi would
         // mean "discharge to a higher grid value than I'm willing to charge
@@ -164,7 +158,6 @@ void SbseController::pre_setup()
         {"write_ok_count",    Config::Uint32(0)},
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
-        {"simulation_mode",   Config::Bool(false)},
         {"modbus_active",     Config::Bool(false)},
         {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
         {"modbus_force_w",    Config::Int32(0)},
@@ -214,7 +207,6 @@ void SbseController::copy_live_tunable_to_active()
     active_config.get("alpha_setpoint_milli")   ->updateUint(config.get("alpha_setpoint_milli") ->asUint());
     active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
     active_config.get("safety_zero_after_failures")->updateUint(config.get("safety_zero_after_failures")->asUint());
-    active_config.get("simulation_mode")        ->updateBool(config.get("simulation_mode")      ->asBool());
 }
 
 void SbseController::apply_runtime_from_active()
@@ -230,9 +222,6 @@ void SbseController::apply_runtime_from_active()
     alpha_setpoint  = static_cast<float>(active_config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
-    simulation_mode = active_config.get("simulation_mode")->asBool();
-
-    state.get("simulation_mode")->updateBool(simulation_mode);
 }
 
 void SbseController::register_urls()

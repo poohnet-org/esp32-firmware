@@ -136,7 +136,6 @@ private:
     float    alpha_setpoint     = 0.70f;
     int32_t  deadband_w         = 50;
     uint32_t safety_zero_after_failures = 5;  // 0 disables the safety net
-    bool     simulation_mode    = false;       // skips actual Modbus writes when true
 
     // SMA Modbus TCP server -- the network/protocol adapter. Its persistent
     // config is mirrored into the controller's cached fields below so the

@@ -243,7 +243,7 @@ orthogonal to that derived signal.
 |---|---|---|
 | `config` (NVS-backed) | `SbseController::config` | HTTP/MQTT `config_update` only |
 | `active_config` | `SbseController::active_config` | HTTP/MQTT/dashboard `active_config_update`, **plus** internal mutations from `apply_modbus_setpoint_block` (the Modbus-driven path bypasses the command handler to avoid clearing its own force-mode state) |
-| Cached fast-path mirrors (`kp`, `kd`, `max_*`, `grid_charge_target_w`, `grid_discharge_target_w`, `alpha_*`, `deadband_w`, `simulation_mode`) | `SbseController` members | `apply_runtime_from_active()` after any `active_config` change |
+| Cached fast-path mirrors (`kp`, `kd`, `max_*`, `grid_charge_target_w`, `grid_discharge_target_w`, `alpha_*`, `deadband_w`) | `SbseController` members | `apply_runtime_from_active()` after any `active_config` change |
 | `state` (read-only) | `SbseController::state` | One updater per field, scattered across the cycle. Auto-publishes via the API event bus. |
 | `modbus_op_mod`, `modbus_force_w`, `modbus_active`, `last_modbus_write_us` | `SbseController` members | Modbus dispatch handlers + operator-takeover paths |
 | Modbus server (listener, dispatch state) | `SbseModbusServer` | `configure()` / `start()` / `stop()` from controller |
@@ -341,6 +341,5 @@ Approximate, last measured commit `e659a9ed2…`:
   inverter through the `modbus_tcp_client` pool global; the trace
   history and Modbus server are owned by-value, so swapping
   implementations would be a code edit.
-- **No simulator beyond `simulation_mode`.** The bool config flag
-  exercises the full computation path but skips the actual writes.
-  Useful for tuning verification, not for testing the inverter handshake.
+- **No simulator.** Every code path that writes to the inverter does so
+  for real. There is no offline-test or dry-run mode.

@@ -24,7 +24,6 @@ let x = {
             "apply": "Apply",
             "pause":  "Pause 30 s (0 W)",
             "resume": "Resume",
-            "sim_badge": "SIM",
             "mb_badge":  "MB",
             "mb_badge_help_title": "An external Modbus TCP client is currently steering the controller",
             "hard_badge": "HARD",
@@ -59,15 +58,10 @@ let x = {
             "title": "SBSE 5.0 Controller",
 
             "section_connection": "Connection",
-            "section_mode":       "Operating mode",
             "section_timing":     "Loop timing",
             "section_targets":    "Control targets",
             "section_tuning":     "Controller tuning",
             "section_safety":     "Safety",
-
-            "simulation_mode":      "Simulation mode",
-            "simulation_mode_desc": "Run the controller without writing to the inverter",
-            "simulation_mode_help": <>When enabled, the controller still reads grid/battery/SoC and computes setpoints exactly as in normal operation, but skips the actual Modbus write. Useful for verifying tuning before letting it touch the battery. The dashboard chart, the read-only state, and the deadband logic all behave as if the writes had gone out.</>,
 
             "enabled":         "Enabled",
             "enabled_desc":    "Run the setpoint controller",
