@@ -6,7 +6,7 @@ let x = {
             "title": "SBSE-Regler"
         },
         "status": {
-            "title": "SBSE 5.0 Regler",
+            "title": "SBSE-Regler",
             "grid": "Netz",
             "battery": "Batterie",
             "soc": "Ladezustand",
@@ -53,7 +53,7 @@ let x = {
             "loading":   "Sammle Messwerte…"
         },
         "content": {
-            "title": "SBSE 5.0 Regler",
+            "title": "SBSE-Regler",
 
             "section_connection": "Verbindung",
             "section_timing":     "Regelzyklus",

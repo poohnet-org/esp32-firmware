@@ -6,7 +6,7 @@ let x = {
             "title": "SBSE Controller"
         },
         "status": {
-            "title": "SBSE 5.0 Controller",
+            "title": "SBSE Controller",
             "grid": "Grid",
             "battery": "Battery",
             "soc": "State of charge",
@@ -53,7 +53,7 @@ let x = {
             "loading":   "Collecting samples…"
         },
         "content": {
-            "title": "SBSE 5.0 Controller",
+            "title": "SBSE Controller",
 
             "section_connection": "Connection",
             "section_timing":     "Loop timing",
