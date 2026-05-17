@@ -48,7 +48,7 @@ identical semantics:
 | Field | Default | Units / range | Purpose |
 |---|---:|---|---|
 | `grid_charge_target_w` | `0` | W, −750…+2500 | **Lower grid bound.** When the grid would go below this value (i.e. exporting more than the operator is comfortable with), the controller charges the battery to bring the grid back up to this value. |
-| `grid_discharge_target_w` | `0` | W, −750…+2500, **must be ≥ `grid_charge_target_w`** | **Upper grid bound.** When the grid would go above this value (i.e. importing), the controller discharges the battery to bring the grid back down. Together with `grid_charge_target_w` this defines an `[lo, hi]` *grid deadzone* in which the controller stops chasing a target (`delta = 0`); the battery's current action is preserved via the implicit-I feedback. See [Grid targets and the deadzone](#grid-targets-and-the-deadzone) below. |
+| `grid_discharge_target_w` | `0` | W, −750…+2500, **must be ≥ `grid_charge_target_w`** | **Discharge rescue threshold.** When the grid drifts above this value, the controller starts discharging the battery to bring the grid back down to `hi`. Below `hi` the controller chases `grid_charge_target_w` instead, by charging only. See [Grid targets](#grid-targets) below. |
 | `max_charge_w` | `5000` | W, 0…10 000 | **Battery saturation limit, charge direction.** Hard cap on charging power. The computed setpoint is clamped to `[−max_charge_w, +max_discharge_w]` before being written. `0` disables charging entirely. Orthogonal to the grid targets. |
 | `max_discharge_w` | `5000` | W, 0…10 000 | **Battery saturation limit, discharge direction.** Hard cap on discharging power. `0` disables discharging entirely. Orthogonal to the grid targets. |
 | `kp_milli` | `1000` (= Kp 1.0) | Kp × 1000, 100…2000 | **Proportional controller gain.** Per tick (outside the deadzone): `new_setpoint = battery_now + Kp · (ema_grid − target) + Kd · Δema_grid`, where `target` is whichever bound the controller is chasing. `Kp = 1.0` ≈ "one-shot correction." Lower (~0.5) = slower, more damped. Higher (~1.5) = snappier but can ring against the EMA filter. |
@@ -206,92 +206,116 @@ c.close()
 
 To release: write `OpMod = 2424` then `40793` with all-zeros (or non-zero `BatChaMaxW` / `BatDchgMaxW` for normal P-controller operation under those caps), or just send any `active_config` change from the dashboard.
 
-## Grid targets and the deadzone
+## Grid targets
 
-The controller's set-point for the grid isn't one number, it's a closed
-interval `[lo, hi]` where:
+The controller has **two** grid-side targets that play different roles:
 
-- `lo = grid_charge_target_w` (the **lower** bound, the value below which
-  the controller charges the battery).
-- `hi = grid_discharge_target_w` (the **upper** bound, the value above
-  which the controller discharges the battery).
+- `lo = grid_charge_target_w` — the **primary target**. The controller
+  always tries to reach this value by *charging* the battery.
+- `hi = grid_discharge_target_w` — the **rescue threshold**. The
+  controller only acts on `hi` when the grid drifts above it; it then
+  starts *discharging* the battery to bring the grid back down to `hi`.
 
-Per tick the rule is uniform:
+The validator enforces `hi ≥ lo`. The dashboard renders a `HARD` badge
+when `lo == hi` and a `SOFT` badge when `lo < hi`; that's a derived
+signal, not a separate configuration.
 
-| Where is `ema_grid` relative to `[lo, hi]`? | What the controller does |
+### Hard mode (`lo == hi`)
+
+Symmetric P + implicit-I + D chase of a single value, in both
+directions. Identical to the legacy `target_grid_w` semantics. The
+controller will charge *or* discharge as needed to hit the target.
+
+### Soft mode (`lo < hi`)  -- asymmetric
+
+| Where is `ema_grid`? | What the controller does |
 |---|---|
-| `ema_grid < lo` (over-exporting beyond `lo`) | charge battery: chase `lo` with P + implicit-I + D |
-| `ema_grid > hi` (importing more than `hi`) | discharge battery: chase `hi` with P + implicit-I + D |
-| `ema_grid ∈ [lo, hi]` and `lo == hi` (hard mode) | chase the single point (`lo == hi`) with the P-controller -- identical to the legacy `target_grid_w` behaviour |
-| `ema_grid ∈ [lo, hi]` and `lo < hi` (soft mode) | **no target chase** — `delta = 0`, the battery preserves its current action via the implicit-I feedback in `battery_w_raw`. The D term still fires across grid drift, so a fast load step that would push grid out of the deadzone gets anticipated. |
+| `ema_grid > hi` | **Chase `hi` by discharging.** Standard P + I + D law with `hi` as the target. Discharge is allowed up to `max_discharge_w`. |
+| `ema_grid ≤ hi` | **Chase `lo` by charging only.** Same P + I + D law with `lo` as the target, but the output is clamped to `≤ 0` -- the controller is forbidden from discharging just to pursue `lo`. If charging less than 0 won't reach `lo` (i.e. PV is too weak), the battery simply stays at 0 and the grid drifts up rather than burning battery to pad the export. |
 
-The validator forbids `hi < lo`. The dashboard renders a `HARD` badge when
-`lo == hi` and a `SOFT` badge when `lo < hi`; that is a derived signal,
-not a separate configuration.
+This implements your stated intent:
+
+> "Excess PV power first goes to the grid until reaching the configured
+> target value and the remaining PV power goes to the battery. If the
+> house draws more power than PV can deliver, then the battery should be
+> discharged before drawing power from the grid."
+
+Mapping:
+- "excess PV first goes to the grid up to the target": that's `lo` and
+  is chased actively by charging.
+- "remaining PV goes to the battery": natural consequence of chasing
+  `lo` (when PV surplus is large, charging is the only way to keep grid
+  at `lo`).
+- "battery discharged before drawing power from the grid": that's the
+  `hi` rescue. Typically `hi = 0` ("don't import"); a non-zero `hi`
+  means "I'm willing to lose up to `−hi W` of net export before
+  the battery starts discharging to keep at least that much export
+  going" (or, for positive `hi`, "I tolerate up to `hi W` of import
+  before the battery kicks in").
+
+The boundary at `hi` is smooth in the typical steady-state transition
+(battery is near 0 by the time grid reaches `hi` from below, so both
+branches agree). Fast load steps that jump across `hi` while the battery
+is still actively charging see a small step in the commanded setpoint;
+the output EMA softens it.
 
 ### Examples
 
 #### `lo = hi = 0`  (default: pure self-consumption)
 
-The controller chases grid = 0 in both directions -- exactly the same as
-the old default. Any PV surplus → battery charges. Any house deficit →
-battery discharges. Grid stays near 0.
+The controller chases grid = 0 in both directions. Any PV surplus →
+battery charges. Any house deficit → battery discharges. Grid stays
+near 0.
 
 #### `lo = -200, hi = 0`  (export-preferred self-consumption)
 
 | Grid without battery action | Result |
 |---|---|
-| `-500 W` (PV surplus of 500) | charge 300 W → grid `-200` (chase `lo`) |
-| `-100 W` (small PV surplus) | **battery idle → grid `-100`** *(inside deadzone)* |
-| `0 W` (balanced) | **battery idle → grid `0`** |
-| `+500 W` (PV deficit of 500) | discharge 500 W → grid `0` *(chase `hi`, **no further into export**)* |
+| `-500 W` (PV surplus of 500) | charge 300 W → grid `-200` *(chasing `lo`)* |
+| `-100 W` (small PV surplus) | chase `lo` wants discharge → **clamped, battery stays at 0** → grid stays `-100` |
+| `0 W` (balanced) | chase `lo` wants discharge → **clamped, battery stays at 0** → grid stays `0` |
+| `+500 W` (PV deficit of 500) | discharge 500 W → grid `0` *(chasing `hi`, **no further into export**)* |
 
-This is the classic "soft" use case: I want to push up to 200 W into the
-grid when PV is plentiful, but if the house out-draws PV I'd rather use
-the battery than import.
+#### `lo = -720, hi = -500`  (maintain export, with a 500 W discharge rescue)
+
+| Grid without battery action | Result |
+|---|---|
+| `-900 W` (large PV surplus) | charge 180 W → grid `-720` *(chasing `lo`)* |
+| `-700 W` | battery active and charging → ramps to charge a touch more → grid drops to `-720` |
+| `-600 W` (PV starting to drop) | chase `lo` wants less charge; battery ramps toward 0; grid drifts up |
+| `-500 W` (PV further down) | battery has reached 0; chase `lo` clamped → grid drifts above `hi` |
+| `-400 W` (PV well below the export target) | chase `hi` engages → discharge 100 W → grid back to `-500` |
+
+This is your live setup. The `lo` target is "ideal export"; `hi` is
+"minimum acceptable export before the battery starts paying for it".
 
 #### `lo = hi = -200`  (hard: maintain 200 W export at all costs)
 
 | Grid without battery action | Result |
 |---|---|
 | `-500 W` | charge 300 W → grid `-200` |
-| `-100 W` | discharge 100 W → grid `-200` |
-| `+500 W` | discharge 700 W → grid `-200` *(even from battery, to maintain target)* |
+| `-100 W` | discharge 100 W → grid `-200` *(symmetric chase, hard mode allows it)* |
+| `+500 W` | discharge 700 W → grid `-200` |
 
-Same behaviour as the legacy `target_grid_w = -200, soft_target = false`
-setting.
-
-#### `lo = 0, hi = +500`  (allow some import before discharging)
+#### `lo = 0, hi = +500`  (allow up to 500 W import before discharging)
 
 | Grid without battery action | Result |
 |---|---|
 | `-100 W` (small PV surplus) | charge 100 W → grid `0` *(absorb surplus, don't export)* |
-| `+200 W` (importing 200) | **battery idle → grid `+200`** *(inside deadzone)* |
-| `+800 W` (importing 800) | discharge 300 W → grid `+500` *(cap import at `hi`)* |
-
-Useful e.g. if your tariff is fine with a baseline of small grid imports
-but you want to avoid spikes.
-
-#### `lo = hi = +200`  (hard: intentional 200 W import, e.g. cheap-tariff grid charging)
-
-| Grid without battery action | Result |
-|---|---|
-| `0 W` | charge 200 W → grid `+200` *(import 200 W into battery)* |
-| `+500 W` (PV deficit) | discharge 300 W → grid `+200` |
-| `-500 W` (PV surplus) | charge 700 W → grid `+200` *(absorb surplus + 200 from grid)* |
-
-Only effective while `battery_soc < 100`.
+| `+200 W` (importing 200) | chase `hi` wants no action (already below) → **battery stays at 0** → grid stays `+200` |
+| `+800 W` (importing 800) | discharge 300 W → grid `+500` *(chasing `hi`)* |
 
 ### Other interactions
 
 - **Force-mode** (`OpMod 2289` / `2290` from the Modbus server) bypasses
-  the deadzone entirely -- the requested charge / discharge power is
+  the whole target system -- the requested charge / discharge power is
   written directly. SoC clamps, output EMA and the saturation limits
   (`max_charge_w` / `max_discharge_w`) still apply on top.
 - The saturation limits (`max_charge_w` / `max_discharge_w`) are
   orthogonal to the grid targets: an "unreachable" grid target (e.g.
-  `lo = -1000` with `max_charge_w = 100`) is not an error; the controller
-  saturates at the limit and the grid balances wherever it ends up.
+  `lo = -1000` with `max_charge_w = 100`) is not an error; the
+  controller saturates at the limit and the grid balances wherever it
+  ends up.
 - Modbus writes to register `40793` only update the grid targets in the
   `full` authority mode; in the default `caps` mode the operator's
   targets are preserved. See [Modbus authority](#modbus-authority-modbus_server_authority).
@@ -313,15 +337,16 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   if modbus_force_w != 0:                          ── SMA OpMod 2289 / 2290
     raw_setpoint = modbus_force_w                  ── (P+D bypassed)
-  else:                                            ── unified deadzone P+D
-    effective_target = clamp(ema_grid, lo, hi)     ──   lo  when  ema_grid < lo
-                                                   ──   hi  when  ema_grid > hi
-                                                   ── ema_grid when  ema_grid in [lo, hi]
-                                                   ──            (delta = 0; battery preserves
-                                                   ──             its current action via the
-                                                   ──             implicit-I in battery_now)
-    delta            = ema_grid − effective_target
-    raw_setpoint     = battery_now + Kp · delta + Kd · d_ema_grid
+  elif lo == hi:                                   ── hard mode: symmetric chase
+    delta        = ema_grid − lo
+    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
+  elif ema_grid > hi:                              ── soft, rescue: chase hi via discharge
+    delta        = ema_grid − hi
+    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
+  else:                                            ── soft, primary: chase lo via charge
+    delta        = ema_grid − lo
+    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
+    if raw_setpoint > 0: raw_setpoint = 0          ── never discharge to chase lo
 
   raw_setpoint   = clamp(raw_setpoint, by SoC: 100 % blocks charge, 0 % blocks discharge)
   raw_setpoint   = clamp(raw_setpoint, −max_charge_w, +max_discharge_w)

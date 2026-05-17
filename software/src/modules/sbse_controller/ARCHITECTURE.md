@@ -179,18 +179,18 @@ compute_and_write()
  │  ema_grid       ← α_grid · grid_w_raw + (1 − α_grid) · ema_grid
  │  d_ema_grid     = ema_grid − previous_ema_grid
  │
- │  lo = grid_charge_target_w
- │  hi = grid_discharge_target_w
+ │  lo = grid_charge_target_w   # primary target
+ │  hi = grid_discharge_target_w  # discharge rescue threshold
  │
- │  if modbus_force_w != 0:                (OpMod 2289 / 2290)
- │     raw_setpoint = modbus_force_w       (P + D + deadzone bypassed)
- │  else:
- │     effective_target = clamp(ema_grid, lo, hi)
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − effective_target) + Kd·d_ema_grid
- │     # inside [lo, hi]:  effective_target == ema_grid → delta = 0 →
- │     #                   battery_w_raw is preserved (implicit-I).
- │     # outside [lo, hi]: effective_target snaps to the nearer bound and
- │     #                   the P+D terms chase it.
+ │  if modbus_force_w != 0:                  # OpMod 2289 / 2290
+ │     raw_setpoint = modbus_force_w         # (P + D bypassed)
+ │  elif lo == hi:                           # hard mode: symmetric chase
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − lo) + Kd·d_ema_grid
+ │  elif ema_grid > hi:                      # soft, rescue: discharge to hi
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − hi) + Kd·d_ema_grid
+ │  else:                                    # soft, primary: charge to lo
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − lo) + Kd·d_ema_grid
+ │     if raw_setpoint > 0: raw_setpoint = 0 # never discharge to chase lo
  │
  │  clamp by SoC (100 % blocks charge, 0 % blocks discharge)
  │  clamp by [-max_charge_w, +max_discharge_w]

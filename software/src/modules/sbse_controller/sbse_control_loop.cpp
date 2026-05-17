@@ -330,39 +330,51 @@ void SbseController::compute_and_write()
     //     Output filtering (EMA on setpoint, deadband, SoC clamp) still
     //     applies so a force command can't bypass safety or thrash the bus.
     //
-    // 3b) Two-target deadzone control:
+    // 3b) Hard target (lo == hi): symmetric chase of the single grid value
+    //     in both directions, using the standard P + implicit-I + D law.
+    //     Identical to the legacy single-target behaviour.
     //
-    //       lo = grid_charge_target_w     (lower bound)
-    //       hi = grid_discharge_target_w  (upper bound, validator: hi >= lo)
-    //
-    //     The effective target is the operator's grid value *clamped into*
-    //     [lo, hi]:
-    //
-    //       - ema_grid <  lo  -> effective_target = lo  (chase lo, charge)
-    //       - ema_grid >  hi  -> effective_target = hi  (chase hi, discharge)
-    //       - ema_grid in     -> effective_target = ema_grid  (delta = 0)
-    //         the deadzone       so raw_setpoint = battery_w_raw + Kd * d_grid;
-    //                            the implicit-I via battery_w_raw preserves the
-    //                            battery's current action -- no setpoint
-    //                            discontinuity at the deadzone boundary, no
-    //                            knife-edge oscillation when ema_grid noise
-    //                            crosses lo or hi.
-    //
-    //     Hard mode (lo == hi) collapses to chasing the single value: the
-    //     deadzone has zero width so effective_target == lo == hi for any
-    //     ema_grid, and the formula is identical to the legacy single-target
-    //     behaviour.
+    // 3c) Soft target (lo < hi): asymmetric.
+    //       - Always chase lo by *charging* the battery. The clamp
+    //         setpoint <= 0 prevents discharge for chase-lo: if there's
+    //         not enough excess PV to reach lo, the controller just
+    //         stops charging (battery -> 0) and the grid drifts up
+    //         rather than burning battery to pad the export.
+    //       - When ema_grid drifts above hi, switch to chasing hi by
+    //         *discharging* the battery. This implements the
+    //         "don't import past hi" rescue path. At the hi boundary the
+    //         two branches agree in steady state (battery near 0,
+    //         setpoint near 0) so the transition is smooth.
     float raw_setpoint;
     if (modbus_force_w != 0) {
         raw_setpoint = static_cast<float>(modbus_force_w);
-    } else {
-        const float lo = static_cast<float>(grid_charge_target_w);
-        const float hi = static_cast<float>(grid_discharge_target_w);
-        const float effective_target = std::clamp(ema_grid_w, lo, hi);
-        const float delta_w          = ema_grid_w - effective_target;
+    } else if (grid_charge_target_w == grid_discharge_target_w) {
+        // hard mode
+        const float t       = static_cast<float>(grid_charge_target_w);
+        const float delta_w = ema_grid_w - t;
         raw_setpoint = static_cast<float>(battery_w_raw)
                      + kp * delta_w
                      + kd * d_grid;
+    } else {
+        // soft mode -- asymmetric
+        const float lo = static_cast<float>(grid_charge_target_w);
+        const float hi = static_cast<float>(grid_discharge_target_w);
+        if (ema_grid_w > hi) {
+            // chase hi (discharge to bring grid down to hi)
+            const float delta_w = ema_grid_w - hi;
+            raw_setpoint = static_cast<float>(battery_w_raw)
+                         + kp * delta_w
+                         + kd * d_grid;
+        } else {
+            // chase lo (charge to bring grid down to lo); never discharge
+            const float delta_w = ema_grid_w - lo;
+            raw_setpoint = static_cast<float>(battery_w_raw)
+                         + kp * delta_w
+                         + kd * d_grid;
+            if (raw_setpoint > 0.0f) {
+                raw_setpoint = 0.0f;
+            }
+        }
     }
 
     // 3) SoC limits (only when we have a usable reading).
