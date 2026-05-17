@@ -55,7 +55,7 @@ The split below the C++ level is by **responsibility**, not size.
 |---|---|
 | Module lifecycle (pre_setup / setup / register_urls / register_events / pre_reboot) | `sbse_controller.cpp` |
 | `config` + `active_config` schema, validators, hot-reload plumbing | `sbse_controller.cpp` |
-| `force_release` / `resume` command handlers | `sbse_controller.cpp` |
+| `pause` / `resume` command handlers | `sbse_controller.cpp` |
 | SMA `OpMod` constants and sticky state, force-mode interpretation, `apply_modbus_setpoint_block`, watchdog | `sbse_controller.cpp` |
 | Per-tick read → compute → write pipeline (`tick`, `read_*`, `compute_and_write`, `send_*`) | `sbse_control_loop.cpp` |
 | SBSE register-map constants (`GRID_POWER_ADDR`, `BATTERY_POWER_ADDR`, `SBSE_COMPANION_VALUE`, …) | `sbse_control_loop.cpp` |
@@ -143,7 +143,7 @@ register_urls()      api.addState/addCommand bindings, MQTT mirroring,
                      custom GET /sbse_controller/history endpoint
 register_events()    network-connect listener, schedule tick(),
                      set_handlers() + start() on the Modbus server
-pre_reboot()         cancel tick, stop modbus_server, send_release()
+pre_reboot()         cancel tick, stop modbus_server, send_zero_w()
                      (best-effort 0 W to inverter), stop_connection()
 ```
 
@@ -263,8 +263,8 @@ explicitly. Modbus dispatch mutates `active_config` *directly* (via
 `Config::updateXxx`, which auto-publishes the event but skips the
 command handler) so that its own state isn't immediately stomped.
 
-`force_release` and `resume` also clear Modbus state — they're explicit
-operator takeover.
+`pause` and `resume` also clear Modbus state — they're explicit operator
+takeover.
 
 ## Transport equivalence
 

@@ -85,8 +85,8 @@ identical semantics:
 |---|---|---|
 | `sbse_controller/config_update` | full `config` object | Validates, writes NVS, hot-reloads live-tunable subset. Equivalent to `PUT /sbse_controller/config`. |
 | `sbse_controller/active_config_update` | full `active_config` object | Validates, updates runtime fields. No flash write. Equivalent to `PUT /sbse_controller/active_config`. |
-| `sbse_controller/force_release` | empty | Writes one 0 W setpoint and pauses the loop for 30 s. `mode → paused`. Clears any Modbus-driven force-mode (operator takeover). |
-| `sbse_controller/resume` | empty | Ends a `force_release` pause early. No-op if not paused. Also clears any Modbus force-mode. |
+| `sbse_controller/pause` | empty | Writes one 0 W setpoint and pauses the loop for 30 s. `mode → paused`. Clears any Modbus-driven force-mode (operator takeover). |
+| `sbse_controller/resume` | empty | Ends a `pause` early. No-op if not paused. Also clears any Modbus force-mode. |
 
 ## Trace history endpoint (HTTP only)
 
@@ -152,13 +152,13 @@ The SBSE has a hard grid-feed-in limit configured directly on the inverter (e.g.
 
 - "Block" mode (both caps zero) → battery still charges from PV that can't be exported.
 - "Block Charge" mode → same.
-- The `force_release` / "Pause 30 s" button → same.
+- The `pause` command / "Pause 30 s" button → same.
 
 In other words: while PV output is within the inverter's permitted feed-in range, a 0 W setpoint really idles the battery. Above that range, the battery absorbs the otherwise-curtailed PV no matter what the SBSE controller says. There is no fix at the controller level; raise the inverter's feed-in limit or accept the behaviour.
 
 ### Arbitration
 
-"Last write wins" across **all** writers: Modbus, dashboard, HTTP `PUT /active_config`, and MQTT. An operator-driven `active_config` update, `force_release` or `resume` command also **drops force-mode and clears `modbus_active`** -- the operator is taking over. To re-engage, the Modbus client must send a fresh `40793` write.
+"Last write wins" across **all** writers: Modbus, dashboard, HTTP `PUT /active_config`, and MQTT. An operator-driven `active_config` update, `pause` or `resume` command also **drops force-mode and clears `modbus_active`** -- the operator is taking over. To re-engage, the Modbus client must send a fresh `40793` write.
 
 ### Watchdog
 
@@ -363,8 +363,8 @@ curl http://<sbse-controller-ip>/sbse_controller/config \
   | curl -X PUT http://<sbse-controller-ip>/sbse_controller/config \
          -H 'Content-Type: application/json' -d @-
 
-# Force the loop to release control for 30 s, then resume early:
-curl -X POST http://<sbse-controller-ip>/sbse_controller/force_release
+# Pause the loop for 30 s, then resume early:
+curl -X POST http://<sbse-controller-ip>/sbse_controller/pause
 curl -X POST http://<sbse-controller-ip>/sbse_controller/resume
 
 # Fetch the last 5 minutes of (grid, battery, setpoint, target) at 1 Hz:
@@ -391,9 +391,9 @@ mosquitto_pub -h <broker> -t 'sbse/sbse_controller/active_config_update' \
               -m "$(mosquitto_sub -h <broker> -t 'sbse/sbse_controller/active_config' -C 1 \
                     | jq '.grid_discharge_target_w = 200')"
 
-# Trigger force_release / resume:
-mosquitto_pub -h <broker> -t 'sbse/sbse_controller/force_release' -m '{}'
-mosquitto_pub -h <broker> -t 'sbse/sbse_controller/resume'        -m '{}'
+# Trigger pause / resume:
+mosquitto_pub -h <broker> -t 'sbse/sbse_controller/pause'  -m '{}'
+mosquitto_pub -h <broker> -t 'sbse/sbse_controller/resume' -m '{}'
 ```
 
 The history endpoint is HTTP-only — large per-response payload (~15 kB)

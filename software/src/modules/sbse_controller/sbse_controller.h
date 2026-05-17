@@ -83,7 +83,7 @@ private:
     void read_soc();
     void compute_and_write();
     void send_setpoint(int32_t watts);
-    void send_release();
+    void send_zero_w();        // fire-and-forget 0 W write, used by pause + pre_reboot
     void send_safety_zero();
 
     // SMA Modbus TCP server -- the server class itself is just the protocol

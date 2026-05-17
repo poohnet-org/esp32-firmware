@@ -279,9 +279,9 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                  () => __("sbse_controller.script.save_active_failed"));
     };
 
-    force_release = () => {
-        API.call("sbse_controller/force_release", null,
-                 () => __("sbse_controller.script.force_release_failed"));
+    pause = () => {
+        API.call("sbse_controller/pause", null,
+                 () => __("sbse_controller.script.pause_failed"));
     };
 
     resume = () => {
@@ -418,9 +418,9 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                         <div class="d-flex justify-content-end gap-2 mt-3">
                             <Button variant="outline-warning"
                                     disabled={st.mode === "paused"}
-                                    onClick={this.force_release}>
+                                    onClick={this.pause}>
                                 <Pause size={16} class="me-1"/>
-                                {__("sbse_controller.status.force_release")}
+                                {__("sbse_controller.status.pause")}
                             </Button>
                             <Button variant="outline-success"
                                     disabled={st.mode !== "paused"}

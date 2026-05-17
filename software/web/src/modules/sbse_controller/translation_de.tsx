@@ -21,9 +21,9 @@ let x = {
             "max_charge_w_help":  <>Obergrenze für die Batterieladeleistung. Sofortige Übernahme ohne Flash-Schreibvorgang. <code>0</code> verbietet das Laden.</>,
             "max_discharge_w": "Max. Entladeleistung",
             "max_discharge_w_help": <>Obergrenze für die Batterieentladeleistung. Sofortige Übernahme ohne Flash-Schreibvorgang. <code>0</code> verbietet das Entladen.</>,
-            "apply": "Übernehmen",
-            "force_release": "30 s pausieren (0 W)",
-            "resume":        "Fortsetzen",
+            "apply":  "Übernehmen",
+            "pause":  "30 s pausieren (0 W)",
+            "resume": "Fortsetzen",
             "sim_badge": "SIM",
             "mb_badge":  "MB",
             "mb_badge_help_title": "Ein externer Modbus-TCP-Client steuert den Regler aktuell",
@@ -132,7 +132,7 @@ let x = {
         "script": {
             "save_failed":          "Speichern der SBSE-Regler-Einstellungen fehlgeschlagen",
             "save_active_failed":   "Übernahme des Live-Sollwerts fehlgeschlagen",
-            "force_release_failed": "Auslösen von force_release fehlgeschlagen",
+            "pause_failed":        "Pause des Reglers fehlgeschlagen",
             "resume_failed":        "Fortsetzen des Reglers fehlgeschlagen"
         }
     }
