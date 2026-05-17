@@ -24,7 +24,6 @@ let x = {
             "apply":  "Übernehmen",
             "pause":  "30 s pausieren (0 W)",
             "resume": "Fortsetzen",
-            "sim_badge": "SIM",
             "mb_badge":  "MB",
             "mb_badge_help_title": "Ein externer Modbus-TCP-Client steuert den Regler aktuell",
             "hard_badge": "HART",
@@ -59,15 +58,10 @@ let x = {
             "title": "SBSE 5.0 Regler",
 
             "section_connection": "Verbindung",
-            "section_mode":       "Betriebsmodus",
             "section_timing":     "Regelzyklus",
             "section_targets":    "Sollwerte",
             "section_tuning":     "Reglerparameter",
             "section_safety":     "Sicherheit",
-
-            "simulation_mode":      "Simulationsmodus",
-            "simulation_mode_desc": "Regler laufen lassen, ohne in den Wechselrichter zu schreiben",
-            "simulation_mode_help": <>Wenn aktiviert, liest und berechnet der Regler weiterhin Netz/Batterie/SoC und Sollwerte wie im Normalbetrieb, überspringt aber den eigentlichen Modbus-Schreibvorgang. Nützlich, um die Reglerparameter zu prüfen, bevor die Batterie tatsächlich angesteuert wird. Das Live-Diagramm, der Statuszustand und die Totband-Logik verhalten sich, als wären die Schreibvorgänge erfolgt.</>,
 
             "enabled":         "Aktiviert",
             "enabled_desc":    "Sollwertregler ausführen",

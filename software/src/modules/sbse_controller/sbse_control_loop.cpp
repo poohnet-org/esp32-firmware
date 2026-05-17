@@ -418,20 +418,6 @@ void SbseController::compute_and_write()
 
 void SbseController::send_setpoint(int32_t watts)
 {
-    if (simulation_mode) {
-        // Skip the Modbus write but mirror every state change a real
-        // successful write would have produced, so the deadband logic, the
-        // dashboard counters, and the live chart all behave as if the write
-        // had gone out.
-        last_written_w = watts;
-        last_write_ok  = now_us();
-        ++write_ok_count;
-        state.get("write_ok_count")->updateUint(write_ok_count);
-        publish_setpoint(watts);
-        finish_cycle(current_running_mode());
-        return;
-    }
-
     write_int32be(buf_setpoint + 0, watts);
     write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
 
@@ -480,10 +466,7 @@ void SbseController::send_zero_w()
     // or the operator switches the inverter back to internal control. Used
     // by the `pause` command (operator-driven pause) and `pre_reboot` (so we
     // don't leave a stale active setpoint commanding the battery).
-    //
-    // In simulation mode we skip the actual write but the operator-visible
-    // pause behaviour (handled in the caller) is unaffected.
-    if (connected_client == nullptr || simulation_mode) {
+    if (connected_client == nullptr) {
         return;
     }
 
@@ -544,16 +527,6 @@ void SbseController::cycle_failed(const char *where,
 
 void SbseController::send_safety_zero()
 {
-    if (simulation_mode) {
-        last_written_w = 0;
-        last_write_ok  = now_us();
-        ++write_ok_count;
-        state.get("write_ok_count")->updateUint(write_ok_count);
-        publish_setpoint(0);
-        finish_cycle(Mode::Safety);
-        return;
-    }
-
     write_int32be(buf_setpoint + 0, 0);
     write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
 
