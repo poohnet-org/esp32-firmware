@@ -172,6 +172,13 @@ bool SbseController::begin_cycle()
     if (paused) {
         if (now_us() >= paused_until) {
             paused = false;
+            // Pause held the loop idle long enough that the EMAs and the
+            // derivative-on-measurement reference point are stale. Reseed
+            // on the first post-pause sample so we don't produce a one-cycle
+            // derivative kick from a ~30 s gap in measurements.
+            ema_grid_seeded       = false;
+            prev_ema_grid_seeded  = false;
+            ema_setpoint_seeded   = false;
         } else {
             publish_mode(Mode::Paused);
             return false;
@@ -302,6 +309,10 @@ void SbseController::compute_and_write()
         safety_zero_armed    = false;
         state.get("read_fail_streak")->updateUint(0);
     }
+    // Clear last_error now that the read phase succeeded. The NaN guard or
+    // a failed write later in this cycle may re-set it. updateString dedups
+    // identical values, so this is free when last_error is already empty.
+    state.get("last_error")->updateString("");
 
     // 1) Smooth grid (seed on first sample so the first cycle is correct).
     if (!ema_grid_seeded) {

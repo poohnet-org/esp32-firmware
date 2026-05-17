@@ -669,14 +669,14 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
 
                     <FormRow label={__("sbse_controller.content.grid_charge_target_w")}
                              help={__("sbse_controller.content.grid_charge_target_w_help")}>
-                        <InputNumber min={-10000} max={10000} unit="W"
+                        <InputNumber min={-750} max={2500} unit="W"
                                      value={state.grid_charge_target_w}
                                      onValue={this.set("grid_charge_target_w")}/>
                     </FormRow>
 
                     <FormRow label={__("sbse_controller.content.grid_discharge_target_w")}
                              help={__("sbse_controller.content.grid_discharge_target_w_help")}>
-                        <InputNumber min={-10000} max={10000} unit="W"
+                        <InputNumber min={-750} max={2500} unit="W"
                                      value={state.grid_discharge_target_w}
                                      onValue={this.set("grid_discharge_target_w")}/>
                     </FormRow>

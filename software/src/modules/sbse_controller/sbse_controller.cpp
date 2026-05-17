@@ -311,6 +311,12 @@ void SbseController::register_urls()
         }
         paused       = false;
         paused_until = -1_us;
+        // Reseed the EMAs and the D reference point: the loop has been idle
+        // long enough that prev_ema_grid_w is stale, which would otherwise
+        // produce a derivative kick on the first post-resume cycle.
+        ema_grid_seeded       = false;
+        prev_ema_grid_seeded  = false;
+        ema_setpoint_seeded   = false;
         // Operator takeover. (Idempotent if already cleared by pause.)
         modbus_force_w = 0;
         modbus_op_mod  = SMA_OPMOD_DEFAULT;
@@ -476,7 +482,11 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
         active_config.get("grid_charge_target_w")   ->updateInt(target_clamped);
         active_config.get("grid_discharge_target_w")->updateInt(target_clamped);
     }
-    apply_runtime_from_active();
+    // ForceOnly mode doesn't touch active_config, so the cached fields are
+    // already in sync -- skip the refresh.
+    if (modbus_server_authority >= ModbusAuthority::Caps) {
+        apply_runtime_from_active();
+    }
 
     last_modbus_write_us = now_us();
     modbus_active        = true;
