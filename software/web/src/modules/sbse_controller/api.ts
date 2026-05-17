@@ -18,7 +18,7 @@ export interface config {
     modbus_server_port: number;
     modbus_server_unit_id: number;
     modbus_server_watchdog_s: number;
-    modbus_server_use_grid_spt: boolean;
+    modbus_server_authority: number;   // 0=ForceOnly, 1=Caps, 2=Full
 }
 
 export interface active_config {

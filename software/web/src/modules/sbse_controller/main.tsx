@@ -26,6 +26,7 @@ import { FormSeparator } from "../../ts/components/form_separator";
 import { InputAnyFloat } from "../../ts/components/input_any_float";
 import { InputHost } from "../../ts/components/input_host";
 import { InputNumber } from "../../ts/components/input_number";
+import { InputSelect } from "../../ts/components/input_select";
 import { NavbarItem } from "../../ts/components/navbar_item";
 import { StatusSection } from "../../ts/components/status_section";
 import { SubPage } from "../../ts/components/sub_page";
@@ -713,11 +714,16 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                             switch_label_min_width="110px"/>
                     </FormRow>
 
-                    <FormRow label={__("sbse_controller.content.modbus_server_use_grid_spt")}
-                             help={__("sbse_controller.content.modbus_server_use_grid_spt_help")}>
-                        <Switch desc={__("sbse_controller.content.modbus_server_use_grid_spt_desc")}
-                                checked={state.modbus_server_use_grid_spt}
-                                onClick={this.toggle("modbus_server_use_grid_spt")}/>
+                    <FormRow label={__("sbse_controller.content.modbus_server_authority")}
+                             help={__("sbse_controller.content.modbus_server_authority_help")}>
+                        <InputSelect
+                            items={[
+                                ["0", __("sbse_controller.content.modbus_server_authority_force_only")],
+                                ["1", __("sbse_controller.content.modbus_server_authority_caps")],
+                                ["2", __("sbse_controller.content.modbus_server_authority_full")],
+                            ]}
+                            value={`${state.modbus_server_authority}`}
+                            onValue={(v) => this.setState({modbus_server_authority: parseInt(v, 10)})}/>
                     </FormRow>
 
                 </ConfigForm>

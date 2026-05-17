@@ -48,6 +48,17 @@ public:
     void register_events() override;
     void pre_reboot() override;
 
+    // How much authority an external Modbus client has over the controller's
+    // active_config. Always-honoured: the SMA OpMod (force_charge /
+    // force_discharge) commands; the force power is taken from BatChaMaxW /
+    // BatDchgMaxW in the payload and clamped by the operator's caps at write
+    // time. See CONFIG.md for the full table.
+    enum class ModbusAuthority : uint8_t {
+        ForceOnly = 0,   // ignore BatChaMax, BatDchgMax, GridWSpt in active_config
+        Caps      = 1,   // apply max_charge_w + max_discharge_w; grid targets preserved
+        Full      = 2,   // also apply GridWSpt to both grid targets (hard-mode chase)
+    };
+
     enum class Mode : uint8_t {
         Disabled        = 0,
         NotConnected    = 1,
@@ -145,7 +156,7 @@ private:
     uint16_t modbus_server_port       = 502;
     uint8_t  modbus_server_unit_id    = 3;       // 0 = accept any unit id
     uint32_t modbus_server_watchdog_ms = 60000;  // 0 disables
-    bool     modbus_server_use_grid_spt = false; // mirror GridWSpt -> target_grid_w
+    ModbusAuthority modbus_server_authority = ModbusAuthority::Caps;
 
     // Sticky OpMod (40236) latched between writes. 2424 = Default/Normal (P loop).
     // 2289 = Battery charging (force-charge). 2290 = Battery discharging.
