@@ -97,6 +97,20 @@ function ModeBadge({mode}: {mode: string}) {
     );
 }
 
+function SoftHardBadge({lo, hi}: {lo: number, hi: number}) {
+    const soft = lo !== hi;
+    return (
+        <span class={`badge bg-${soft ? "info" : "secondary"} sbse-mode-pill`}
+              title={soft
+                     ? __("sbse_controller.status.soft_badge_help_title")
+                     : __("sbse_controller.status.hard_badge_help_title")}>
+            {soft
+             ? __("sbse_controller.status.soft_badge")
+             : __("sbse_controller.status.hard_badge")}
+        </span>
+    );
+}
+
 function StatTile(props: {icon: any, label: string, value: string, unit?: string, accent?: string}) {
     return (
         <div class={`sbse-tile ${props.accent ? "sbse-tile-" + props.accent : ""}`}>
@@ -292,22 +306,27 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
         util.addApiEventListener("sbse_controller/state", () => {
             const st = API.get("sbse_controller/state");
             const ac = API.get("sbse_controller/active_config");
-            const samples = [...this.state.samples];
             const now = Date.now() / 1000;
+            const cutoff = now - CHART_WINDOW_S;
+            const prev = this.state.samples;
 
-            samples.push({
+            // Walk past any samples that fell out of the window, then build
+            // the new array in one slice + push instead of clone-then-shift.
+            let first_kept = 0;
+            while (first_kept < prev.length && prev[first_kept].ts < cutoff) {
+                first_kept++;
+            }
+            const new_sample: Sample = {
                 ts:        now,
                 grid:      st.grid_w_ema,
                 battery:   st.battery_w,
                 setpoint:  st.last_setpoint_w,
                 target_lo: ac.grid_charge_target_w,
                 target_hi: ac.grid_discharge_target_w,
-            });
-
-            const cutoff = now - CHART_WINDOW_S;
-            while (samples.length > 0 && samples[0].ts < cutoff) {
-                samples.shift();
-            }
+            };
+            const samples = first_kept === 0
+                ? [...prev, new_sample]
+                : [...prev.slice(first_kept), new_sample];
             this.setState({samples});
         });
     }
@@ -388,19 +407,8 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
                         <div class="d-flex align-items-center gap-2">
-                            {(() => {
-                                const soft = ac.grid_charge_target_w !== ac.grid_discharge_target_w;
-                                return (
-                                    <span class={`badge bg-${soft ? "info" : "secondary"} sbse-mode-pill`}
-                                          title={soft
-                                                 ? __("sbse_controller.status.soft_badge_help_title")
-                                                 : __("sbse_controller.status.hard_badge_help_title")}>
-                                        {soft
-                                         ? __("sbse_controller.status.soft_badge")
-                                         : __("sbse_controller.status.hard_badge")}
-                                    </span>
-                                );
-                            })()}
+                            <SoftHardBadge lo={ac.grid_charge_target_w}
+                                           hi={ac.grid_discharge_target_w}/>
                             {st.modbus_active ?
                                 <span class="badge bg-primary sbse-mode-pill"
                                       title={__("sbse_controller.status.mb_badge_help_title")}>
@@ -647,7 +655,8 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                         <InputHost value={state.host} onValue={this.set("host")}/>
                     </FormRow>
 
-                    <FormRow label={__("sbse_controller.content.port")}>
+                    <FormRow label={__("sbse_controller.content.port")}
+                             help={__("sbse_controller.content.port_help")}>
                         <InputNumber min={1} max={65535} value={state.port} onValue={this.set("port")}/>
                     </FormRow>
 

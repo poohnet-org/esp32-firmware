@@ -68,14 +68,15 @@ let x = {
             "disabled_label":  "aus",
 
             "host":      "Wechselrichter-Host",
-            "host_help": <>IP-Adresse oder Hostname des SBSE-Modbus-TCP-Gateways.</>,
+            "host_help": <>IP-Adresse oder Hostname des SBSE-Modbus-TCP-Gateways. Eine Änderung erfordert einen Neustart.</>,
             "port":      "Modbus-TCP-Port",
+            "port_help": <>TCP-Port des SBSE-Modbus-Gateways. Eine Änderung erfordert einen Neustart.</>,
 
             "tick_ms":      "Zyklusdauer",
-            "tick_ms_help": <>Zykluszeit der Regelung. Ein Lesen–Berechnen–Schreiben pro Zyklus. Kürzer = schnellere Netznachführung, mehr Modbus-Verkehr.</>,
+            "tick_ms_help": <>Zykluszeit der Regelung. Ein Lesen–Berechnen–Schreiben pro Zyklus. Kürzer = schnellere Netznachführung, mehr Modbus-Verkehr. Eine Änderung erfordert einen Neustart.</>,
 
             "soc_interval_ms":      "SoC-Abfrageintervall",
-            "soc_interval_ms_help": <>Wie oft der Batterie-Ladezustand gelesen wird. Der SoC ändert sich langsam; häufige Abfragen sind verschwendete Bandbreite. Muss ≥ Zyklusdauer sein.</>,
+            "soc_interval_ms_help": <>Wie oft der Batterie-Ladezustand gelesen wird. Der SoC ändert sich langsam; häufige Abfragen sind verschwendete Bandbreite. Muss ≥ Zyklusdauer sein. Eine Änderung erfordert einen Neustart.</>,
 
             "grid_charge_target_w":      "Lade-Schwelle (untere Netzgrenze)",
             "grid_charge_target_w_help": <>Untere Grenze des Netz-Totbands. Würde der Netzwert unter diesen Wert fallen (z. B. PV-Überschuss über dem konfigurierten Einspeise-Zielwert), lädt der Regler die Batterie und hebt den Netzwert wieder an. Identisch zur Entlade-Schwelle = harte Einzielregelung; niedriger gesetzt (z. B. <code>-200 W</code>) erzeugt ein asymmetrisches Totband im Weich-Modus. Typischer Wert für Eigenverbrauch: <code>0 W</code>.</>,

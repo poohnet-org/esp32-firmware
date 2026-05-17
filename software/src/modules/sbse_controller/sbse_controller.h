@@ -200,10 +200,15 @@ private:
     // --- Modbus staging buffers (per-cycle, owned by the module) ---
     // Sized via the BUF_*_LEN constants above; the static_asserts in
     // sbse_control_loop.cpp tie them back to the register-block lengths.
+    // buf_zero is reserved for the fire-and-forget 0 W writes (pause /
+    // pre_reboot / safety) so they can't race the in-flight cycle's
+    // buf_setpoint contents if the underlying transact() doesn't copy the
+    // payload synchronously.
     uint16_t buf_grid    [BUF_GRID_LEN];
     uint16_t buf_battery [BUF_BATTERY_LEN];
     uint16_t buf_soc     [BUF_SOC_LEN];
     uint16_t buf_setpoint[BUF_SETPOINT_LEN];
+    uint16_t buf_zero    [BUF_SETPOINT_LEN];
 
     // --- 5-min live trace, served via GET /sbse_controller/history ---
     SbseTraceHistory trace_history;
