@@ -489,12 +489,15 @@ void SbseController::send_zero_w()
     // or the operator switches the inverter back to internal control. Used
     // by the `pause` command (operator-driven pause) and `pre_reboot` (so we
     // don't leave a stale active setpoint commanding the battery).
+    //
+    // Uses buf_zero, not buf_setpoint, so a fire-and-forget call from outside
+    // the cycle pipeline can't trample on an in-flight cycle's payload.
     if (connected_client == nullptr) {
         return;
     }
 
-    write_int32be(buf_setpoint + 0, 0);
-    write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
+    write_int32be(buf_zero + 0, 0);
+    write_int32be(buf_zero + 2, SBSE_COMPANION_VALUE);
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
 
@@ -502,7 +505,7 @@ void SbseController::send_zero_w()
                      TFModbusTCPFunctionCode::WriteMultipleRegisters,
                      POWER_SETPOINT_ADDR,
                      POWER_SETPOINT_REG_COUNT,
-                     buf_setpoint,
+                     buf_zero,
                      MODBUS_TIMEOUT,
     [](TFModbusTCPClientTransactionResult /*result*/, const char * /*err*/) {
         // Best effort, no state churn.
@@ -550,8 +553,11 @@ void SbseController::cycle_failed(const char *where,
 
 void SbseController::send_safety_zero()
 {
-    write_int32be(buf_setpoint + 0, 0);
-    write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
+    // Same rationale as send_zero_w() for using buf_zero: this fires from
+    // inside a cycle's failure callback, the regular send_setpoint flow won't
+    // overlap, but isolating the buffer keeps the invariant uniform.
+    write_int32be(buf_zero + 0, 0);
+    write_int32be(buf_zero + 2, SBSE_COMPANION_VALUE);
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
 
@@ -559,7 +565,7 @@ void SbseController::send_safety_zero()
                      TFModbusTCPFunctionCode::WriteMultipleRegisters,
                      POWER_SETPOINT_ADDR,
                      POWER_SETPOINT_REG_COUNT,
-                     buf_setpoint,
+                     buf_zero,
                      MODBUS_TIMEOUT,
     [this](TFModbusTCPClientTransactionResult result, const char *err) {
         if (result == TFModbusTCPClientTransactionResult::Success) {

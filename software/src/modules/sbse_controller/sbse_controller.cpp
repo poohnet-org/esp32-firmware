@@ -224,6 +224,21 @@ void SbseController::apply_runtime_from_active()
     alpha_setpoint  = static_cast<float>(active_config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
+    // Mode pill is derived from the saturation caps + modbus force state, so
+    // a cap change from dashboard / HTTP / MQTT / Modbus may flip the running
+    // family (running <-> block_charge <-> block_discharge <-> blocked or the
+    // force_* variants). Refresh the published mode immediately when we're
+    // already in a running-family state -- don't touch it when paused /
+    // stale / disabled / safety / faulted, where the cycle owns the badge.
+    const String &mode = state.get("mode")->asString();
+    if (mode == "running"
+        || mode == "blocked"
+        || mode == "block_charge"
+        || mode == "block_discharge"
+        || mode == "force_charge"
+        || mode == "force_discharge") {
+        publish_mode(current_running_mode());
+    }
 }
 
 void SbseController::register_urls()
