@@ -68,14 +68,15 @@ let x = {
             "disabled_label":  "disabled",
 
             "host":      "Inverter host",
-            "host_help": <>IP address or hostname of the SBSE Modbus TCP gateway.</>,
+            "host_help": <>IP address or hostname of the SBSE Modbus TCP gateway. A change requires a reboot to take effect.</>,
             "port":      "Modbus TCP port",
+            "port_help": <>TCP port of the SBSE Modbus gateway. A change requires a reboot to take effect.</>,
 
             "tick_ms":      "Tick interval",
-            "tick_ms_help": <>Control loop period. One read–compute–write cycle per tick. Lower = faster grid tracking; higher = less Modbus traffic.</>,
+            "tick_ms_help": <>Control loop period. One read–compute–write cycle per tick. Lower = faster grid tracking; higher = less Modbus traffic. A change requires a reboot to take effect.</>,
 
             "soc_interval_ms":      "SoC poll interval",
-            "soc_interval_ms_help": <>How often to read the battery SoC. SoC changes slowly; polling it every tick is wasted bandwidth. Must be ≥ tick interval.</>,
+            "soc_interval_ms_help": <>How often to read the battery SoC. SoC changes slowly; polling it every tick is wasted bandwidth. Must be ≥ tick interval. A change requires a reboot to take effect.</>,
 
             "grid_charge_target_w":      "Charge target (lower grid bound)",
             "grid_charge_target_w_help": <>Lower bound of the grid deadzone. When the grid would go below this value (e.g. PV is producing surplus beyond this export setpoint), the controller charges the battery to bring it back up. Set equal to the discharge target for hard single-target chase; set lower for an asymmetric deadzone (soft mode). Typical value for self-consumption: <code>0 W</code>; for "let me export up to 200 W before the battery starts charging": <code>-200 W</code>.</>,
