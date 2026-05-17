@@ -83,8 +83,8 @@ void SbseController::pre_setup()
         {"port",             Config::Uint16(502)},
         {"tick_ms",          Config::Uint(300, 50, 5000)},
         {"soc_interval_ms",  Config::Uint(1000, 100, 60000)},
-        {"grid_charge_target_w",    Config::Int(0, -10000, 10000)},   // lower bound
-        {"grid_discharge_target_w", Config::Int(0, -10000, 10000)},   // upper bound
+        {"grid_charge_target_w",    Config::Int(0, -750, 2500)},   // lower bound
+        {"grid_discharge_target_w", Config::Int(0, -750, 2500)},   // upper bound
         {"max_charge_w",     Config::Uint(5000, 0, 10000)},
         {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
         {"kp_milli",         Config::Uint(1000, 100, 2000)},  // Kp * 1000 in [0.1 .. 2.0]
@@ -129,8 +129,8 @@ void SbseController::pre_setup()
     // values are re-seeded from the persistent config above. Use this channel
     // for automation / frequent steering to avoid flash wear.
     active_config = ConfigRoot{Config::Object({
-        {"grid_charge_target_w",    Config::Int(0, -10000, 10000)},
-        {"grid_discharge_target_w", Config::Int(0, -10000, 10000)},
+        {"grid_charge_target_w",    Config::Int(0, -750, 2500)},
+        {"grid_discharge_target_w", Config::Int(0, -750, 2500)},
         {"max_charge_w",     Config::Uint(5000, 0, 10000)},
         {"max_discharge_w",  Config::Uint(5000, 0, 10000)},
         {"kp_milli",         Config::Uint(1000, 100, 2000)},
@@ -442,7 +442,7 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
     auto clamp_w = [](uint32_t v) -> uint32_t { return v > 10000u ? 10000u : v; };
     const uint32_t max_charge_clamped    = clamp_w(bat_cha_max);
     const uint32_t max_discharge_clamped = clamp_w(bat_dchg_max);
-    const int32_t  target_clamped        = std::clamp(grid_spt, int32_t{-10000}, int32_t{10000});
+    const int32_t  target_clamped        = std::clamp(grid_spt, int32_t{-750}, int32_t{2500});
 
     // Interpret OpMod. Force modes bypass the P controller (see compute_and_write
     // step 3a). OpMod 2424 lets the P controller drive against the new caps and

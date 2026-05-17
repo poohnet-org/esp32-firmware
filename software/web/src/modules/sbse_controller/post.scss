@@ -125,31 +125,40 @@
 // Two stacked <input type="range"> elements share a transparent track and a
 // single shared visual. Only the thumbs accept pointer events so the layered
 // inputs don't fight each other.
+//
+// Geometry (using fixed pixel values so vertical centring is browser-stable):
+//
+//   container height  = 24px
+//   visible track     =  6px tall (gray base + colored active band overlay)
+//   <input> takes full container height; native runnable-track is also 6px
+//   so its midline matches the visible track midline (12px from top).
+//   thumb is 18px round, centred on that midline via margin-top = -6px.
+
 .sbse-range-slider {
     position: relative;
-    height: 1.5rem;
+    height: 24px;
     min-width: 0;
+    padding: 0;
 
-    .sbse-range-track {
-        position: absolute;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 100%;
-        height: 0.3rem;
-        background: rgba(0, 0, 0, 0.1);
-        border-radius: 0.15rem;
-        pointer-events: none;
-    }
-
+    .sbse-range-track,
     .sbse-range-active {
         position: absolute;
         top: 50%;
-        transform: translateY(-50%);
-        height: 0.3rem;
-        background: var(--bs-primary);
-        border-radius: 0.15rem;
-        opacity: 0.55;
+        height: 6px;
+        margin-top: -3px;     // centre on the container midline
+        border-radius: 3px;
         pointer-events: none;
+    }
+
+    .sbse-range-track {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.15);
+    }
+
+    .sbse-range-active {
+        // left / right set inline by the React style prop
+        background: var(--bs-primary);
+        opacity: 0.55;
     }
 
     .sbse-range-input {
@@ -164,56 +173,57 @@
         outline: none;
         -webkit-appearance: none;
         appearance: none;
-        // Only the thumbs are interactive; the input itself is invisible to clicks.
+        // Only the thumbs are interactive; the input itself is invisible to clicks
+        // so two stacked inputs don't fight each other for the track surface.
         pointer-events: none;
 
         &::-webkit-slider-runnable-track {
             background: transparent;
             border: 0;
-            height: 1.5rem;
+            height: 6px;
         }
         &::-moz-range-track {
             background: transparent;
             border: 0;
-            height: 1.5rem;
+            height: 6px;
         }
 
         &::-webkit-slider-thumb {
             pointer-events: auto;
             -webkit-appearance: none;
             appearance: none;
-            width: 1rem;
-            height: 1rem;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
             background: var(--bs-primary);
             border: 2px solid #fff;
             cursor: grab;
-            margin-top: -0.35rem;  // recentre over the track
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            margin-top: -6px;        // -(thumb - runnable_track) / 2 = -(18 - 6) / 2
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
         }
         &::-moz-range-thumb {
             pointer-events: auto;
-            width: 1rem;
-            height: 1rem;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
             background: var(--bs-primary);
             border: 2px solid #fff;
             cursor: grab;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
         }
 
         &:focus::-webkit-slider-thumb {
-            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+            box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.25);
         }
         &:focus::-moz-range-thumb {
-            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+            box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.25);
         }
     }
 }
 
 [data-bs-theme="dark"] .sbse-range-slider {
     .sbse-range-track {
-        background: rgba(255, 255, 255, 0.15);
+        background: rgba(255, 255, 255, 0.18);
     }
     .sbse-range-input {
         &::-webkit-slider-thumb { border-color: var(--bs-body-bg); }
