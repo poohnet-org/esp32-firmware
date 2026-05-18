@@ -150,6 +150,10 @@ void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*re
     // re-trip the safety setpoint if failures resume.
     consecutive_failures = 0;
     safety_zero_armed   = false;
+    // Keep-alive timer: don't carry an idle measurement across a disconnect,
+    // and drop any in-flight two-tick keep-alive event.
+    battery_idle_since_us = -1_us;
+    keepalive_pending_zero = false;
     state.get("read_fail_streak")->updateUint(0);
     publish_mode(Mode::NotConnected);
 }
@@ -179,6 +183,12 @@ bool SbseController::begin_cycle()
             ema_grid_seeded       = false;
             prev_ema_grid_seeded  = false;
             ema_setpoint_seeded   = false;
+            // The 30 s pause-write-0 doesn't count toward keep-alive: the
+            // operator just asked us to be silent, not to bypass standby
+            // prevention right away. Also drop any in-flight keep-alive
+            // return-write -- pause already wrote 0.
+            battery_idle_since_us  = -1_us;
+            keepalive_pending_zero = false;
         } else {
             publish_mode(Mode::Paused);
             return false;
@@ -335,57 +345,66 @@ void SbseController::compute_and_write()
     prev_ema_grid_w      = ema_grid_w;
     prev_ema_grid_seeded = true;
 
-    // 3a) Force-mode bypass. A Modbus client commanded a fixed battery power
-    //     via SMA OpMod 2289 (charge) or 2290 (discharge). Skip the P loop,
-    //     skip the grid EMA derivative -- command the exact requested watts.
-    //     Output filtering (EMA on setpoint, deadband, SoC clamp) still
-    //     applies so a force command can't bypass safety or thrash the bus.
+    // 3) Compute the raw battery setpoint.
     //
-    // 3b) Hard target (lo == hi): symmetric chase of the single grid value
-    //     in both directions, using the standard P + implicit-I + D law.
-    //     Identical to the legacy single-target behaviour.
+    //   3a) Force-mode bypass. A Modbus client commanded a fixed battery power
+    //       via SMA OpMod 2289 (charge) or 2290 (discharge). Skip the P loop,
+    //       skip the EMA derivative -- command the exact requested watts.
+    //       Output filtering (EMA on setpoint, deadband, SoC clamp) still
+    //       applies so a force command can't bypass safety or thrash the bus.
     //
-    // 3c) Soft target (lo < hi): asymmetric.
-    //       - Always chase lo by *charging* the battery. The clamp
-    //         setpoint <= 0 prevents discharge for chase-lo: if there's
-    //         not enough excess PV to reach lo, the controller just
-    //         stops charging (battery -> 0) and the grid drifts up
-    //         rather than burning battery to pad the export.
-    //       - When ema_grid drifts above hi, switch to chasing hi by
-    //         *discharging* the battery. This implements the
-    //         "don't import past hi" rescue path. At the hi boundary the
-    //         two branches agree in steady state (battery near 0,
-    //         setpoint near 0) so the transition is smooth.
+    //   3b) Otherwise the P + implicit-I + D law runs against an effective
+    //       target chosen by where the *natural grid* sits relative to the
+    //       [lo, hi] deadzone:
+    //
+    //         natural_grid = ema_grid_w + battery_w_raw   (= home_load - PV;
+    //                                                      grid if battery=0)
+    //         target       = clamp(natural_grid, lo, hi)
+    //
+    //       - natural_grid > hi  -> PV deficit beyond the rescue threshold.
+    //                               target = hi: discharge to keep grid <= hi.
+    //       - natural_grid < lo  -> PV surplus beyond the export floor.
+    //                               target = lo: charge to keep grid >= lo.
+    //       - lo <= natural_grid <= hi  -> the deadzone. target = natural_grid
+    //                               so the formula yields raw = 0 (with Kp=1)
+    //                               or a gentle decay (with Kp<1), winding any
+    //                               leftover battery commitment toward idle.
+    //
+    //       Hard mode (lo == hi) is the natural collapse of this rule:
+    //       clamp(., lo, lo) == lo for any natural_grid, so the formula is
+    //       a symmetric P+I+D chase of the single target. The direction-lock
+    //       clamps below become a "no overshoot through zero" guard so noise
+    //       around the target doesn't sign-flip the battery.
+    //
+    //       Branching on natural_grid (PV vs load vs targets) rather than on
+    //       ema_grid alone keeps the law continuous at the deadzone boundary
+    //       even when the battery is mid-ramp: a brief ema_grid jiggle across
+    //       hi while the battery is actively discharging at steady-state
+    //       (load > PV) leaves natural_grid well above hi, so the regime
+    //       stays "discharging" and the setpoint doesn't slam to 0 (the
+    //       prior implementation's bug).
     float raw_setpoint;
     if (modbus_force_w != 0) {
         raw_setpoint = static_cast<float>(modbus_force_w);
-    } else if (grid_charge_target_w == grid_discharge_target_w) {
-        // hard mode
-        const float t       = static_cast<float>(grid_charge_target_w);
-        const float delta_w = ema_grid_w - t;
+    } else {
+        const float lo_f          = static_cast<float>(grid_charge_target_w);
+        const float hi_f          = static_cast<float>(grid_discharge_target_w);
+        const float natural_grid  = ema_grid_w + static_cast<float>(battery_w_raw);
+        const float target_w_f    = std::clamp(natural_grid, lo_f, hi_f);
+        const float delta_w       = ema_grid_w - target_w_f;
+
         raw_setpoint = static_cast<float>(battery_w_raw)
                      + kp * delta_w
                      + kd * d_grid;
-    } else {
-        // soft mode -- asymmetric
-        const float lo = static_cast<float>(grid_charge_target_w);
-        const float hi = static_cast<float>(grid_discharge_target_w);
-        if (ema_grid_w > hi) {
-            // chase hi (discharge to bring grid down to hi)
-            const float delta_w = ema_grid_w - hi;
-            raw_setpoint = static_cast<float>(battery_w_raw)
-                         + kp * delta_w
-                         + kd * d_grid;
-        } else {
-            // chase lo (charge to bring grid down to lo); never discharge
-            const float delta_w = ema_grid_w - lo;
-            raw_setpoint = static_cast<float>(battery_w_raw)
-                         + kp * delta_w
-                         + kd * d_grid;
-            if (raw_setpoint > 0.0f) {
-                raw_setpoint = 0.0f;
-            }
-        }
+
+        // Direction lock. In each active regime the battery acts in its
+        // natural direction only: when natural_grid is above hi we never
+        // charge (which would push grid further above hi), and below lo
+        // we never discharge (which would burn battery to pad export).
+        // Inside the deadzone the formula naturally produces raw == 0 at
+        // Kp=1, so no clamp is needed there.
+        if (natural_grid > hi_f && raw_setpoint < 0.0f) raw_setpoint = 0.0f;
+        if (natural_grid < lo_f && raw_setpoint > 0.0f) raw_setpoint = 0.0f;
     }
 
     // 3) SoC limits (only when we have a usable reading).
@@ -417,7 +436,7 @@ void SbseController::compute_and_write()
         return;
     }
 
-    const int32_t target_w = lroundf(ema_setpoint_w);
+    int32_t target_w = lroundf(ema_setpoint_w);
 
     state.get("grid_w_raw")->updateInt(grid_w_raw);
     state.get("grid_w_ema")->updateInt(lroundf(ema_grid_w));
@@ -427,16 +446,106 @@ void SbseController::compute_and_write()
     trace_history.add_sample(lroundf(ema_grid_w), battery_w_raw, last_written_w,
                              grid_charge_target_w, grid_discharge_target_w);
 
-    // 7) Deadband. If the new target is within deadband of the last write,
+    // 7) Keep-alive heartbeat. Track how long the battery has been idle, and
+    //    when the controller is about to fall into the "write 0 W again"
+    //    deadband path with the inverter approaching its 10-15 min standby
+    //    threshold, override the write with a small alternating-sign pulse.
+    //    This prevents the 20-30 s wake-up lag when a subsequent regime
+    //    change demands prompt battery action.
+    //
+    //    Only fires in the normal P-controller branch -- force-mode and
+    //    safety-zero are explicit operator/system overrides we won't second-
+    //    guess; pause is handled by the early return above.
+    if (battery_w_raw != 0) {
+        battery_idle_since_us = -1_us;
+    } else if (battery_idle_since_us == -1_us) {
+        battery_idle_since_us = now_us();
+    }
+
+    // A keep-alive event is two ticks long:
+    //   tick N   -- the pulse: target_w = +/-keepalive_pulse_w, deadband bypassed.
+    //   tick N+1 -- the return: target_w forced to 0, deadband bypassed,
+    //               ema_setpoint snapped to 0 so the smoother doesn't drag
+    //               the next few writes off from idle. The return reliably
+    //               winds the inverter back to 0 W regardless of how
+    //               keepalive_pulse_w compares to deadband_w.
+    bool keepalive_fired = false;
+    bool keepalive_return = false;
+    if (keepalive_pending_zero) {
+        keepalive_pending_zero = false;
+        // Only force the 0 W return if no other source of truth has stepped
+        // in between the two ticks (force-mode write, etc.). If force-mode
+        // is active, its setpoint is already in target_w from the chase
+        // block above and the keep-alive event is silently abandoned.
+        if (modbus_force_w == 0) {
+            keepalive_return = true;
+            target_w         = 0;
+            ema_setpoint_w   = 0.0f;
+        }
+    } else if (keepalive_interval_s > 0
+               && target_w == 0
+               && modbus_force_w == 0
+               && battery_idle_since_us != -1_us
+               && deadline_elapsed(battery_idle_since_us
+                                   + micros_t{static_cast<int64_t>(keepalive_interval_s) * 1000000LL})) {
+        const int32_t pulse = pick_keepalive_pulse();
+        if (pulse != 0) {
+            target_w = pulse;
+            keepalive_fired        = true;
+            keepalive_pending_zero = true;
+            // Defer the next pulse by one full interval. The inverter may
+            // take a couple of cycles to read back as non-zero (especially
+            // the first pulse breaking it out of standby); without this,
+            // battery_w_raw == 0 on the next cycle would re-fire keep-alive
+            // every tick.
+            battery_idle_since_us  = now_us();
+        }
+    }
+
+    // 8) Deadband. If the new target is within deadband of the last write,
     //    skip the write -- the SBSE holds the last commanded setpoint
     //    indefinitely (no internal-control fallback), so there is no
     //    watchdog to satisfy. This cuts write traffic and cell churn.
-    if (last_write_ok != -1_us && std::abs(target_w - last_written_w) < deadband_w) {
+    //    Keep-alive bypasses the deadband on both its pulse and its return.
+    const bool bypass_deadband = keepalive_fired || keepalive_return;
+    if (!bypass_deadband
+        && last_write_ok != -1_us
+        && std::abs(target_w - last_written_w) < deadband_w) {
         finish_cycle(current_running_mode());
         return;
     }
 
     send_setpoint(target_w);
+}
+
+int32_t SbseController::pick_keepalive_pulse()
+{
+    // Choose the next keep-alive pulse: alternating sign so the long-run
+    // energy contribution averages to zero, respecting the saturation caps
+    // and the SoC edges. If the preferred direction is unavailable, try the
+    // other; if neither is available (both caps zero, or SoC pinned with
+    // only the other direction blocked too), return 0 and the keep-alive
+    // simply doesn't fire this cycle -- we'll retry on the next one.
+    const int32_t mag = keepalive_pulse_w;
+    if (mag <= 0) {
+        return 0;
+    }
+
+    const int32_t pulse_d = std::min(mag, max_discharge_w);
+    const int32_t pulse_c = std::min(mag, max_charge_w);
+    const bool can_discharge = pulse_d > 0 && (soc_pct == 255 || soc_pct > 0);
+    const bool can_charge    = pulse_c > 0 && (soc_pct == 255 || soc_pct < 100);
+
+    if (!can_discharge && !can_charge) {
+        return 0;
+    }
+
+    bool charge = keepalive_next_charge;
+    if ( charge && !can_charge)    charge = false;
+    if (!charge && !can_discharge) charge = true;
+
+    keepalive_next_charge = !charge;
+    return charge ? -pulse_c : pulse_d;
 }
 
 void SbseController::send_setpoint(int32_t watts)

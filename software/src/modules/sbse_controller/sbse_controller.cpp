@@ -93,6 +93,11 @@ void SbseController::pre_setup()
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},  // 0 disables
+        // Keep-alive heartbeat. Prevents the inverter from entering its
+        // 10-15 min standby (which costs a ~20-30 s wake-up lag on the next
+        // non-zero setpoint). Live-tunable; mirror in active_config below.
+        {"keepalive_interval_s", Config::Uint(480, 0, 1800)},  // 0 disables; default 8 min
+        {"keepalive_pulse_w",    Config::Uint(50, 0, 500)},    // pulse magnitude in W
         // SMA-compatible Modbus TCP server. All four fields are init-only:
         // changing them stops/starts the server but doesn't touch active_config.
         {"modbus_server_enabled",     Config::Bool(false)},
@@ -139,6 +144,8 @@ void SbseController::pre_setup()
         {"alpha_setpoint_milli", Config::Uint(700, 10, 1000)},
         {"deadband_w",       Config::Uint(50, 0, 1000)},
         {"safety_zero_after_failures", Config::Uint(5, 0, 100)},
+        {"keepalive_interval_s", Config::Uint(480, 0, 1800)},
+        {"keepalive_pulse_w",    Config::Uint(50, 0, 500)},
     }), [](Config &cfg, ConfigSource /*source*/) -> String {
         // The two grid targets define an [lo, hi] deadzone. lo > hi would
         // mean "discharge to a higher grid value than I'm willing to charge
@@ -209,6 +216,8 @@ void SbseController::copy_live_tunable_to_active()
     active_config.get("alpha_setpoint_milli")   ->updateUint(config.get("alpha_setpoint_milli") ->asUint());
     active_config.get("deadband_w")             ->updateUint(config.get("deadband_w")           ->asUint());
     active_config.get("safety_zero_after_failures")->updateUint(config.get("safety_zero_after_failures")->asUint());
+    active_config.get("keepalive_interval_s")   ->updateUint(config.get("keepalive_interval_s") ->asUint());
+    active_config.get("keepalive_pulse_w")      ->updateUint(config.get("keepalive_pulse_w")    ->asUint());
 }
 
 void SbseController::apply_runtime_from_active()
@@ -224,6 +233,8 @@ void SbseController::apply_runtime_from_active()
     alpha_setpoint  = static_cast<float>(active_config.get("alpha_setpoint_milli")->asUint()) / 1000.0f;
     deadband_w      = static_cast<int32_t>(active_config.get("deadband_w")->asUint());
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
+    keepalive_interval_s = active_config.get("keepalive_interval_s")->asUint();
+    keepalive_pulse_w    = static_cast<int32_t>(active_config.get("keepalive_pulse_w")->asUint());
     // Mode pill is derived from the saturation caps + modbus force state, so
     // a cap change from dashboard / HTTP / MQTT / Modbus may flip the running
     // family (running <-> block_charge <-> block_discharge <-> blocked or the
@@ -332,6 +343,10 @@ void SbseController::register_urls()
         ema_grid_seeded       = false;
         prev_ema_grid_seeded  = false;
         ema_setpoint_seeded   = false;
+        // Don't carry a stale battery-idle measurement across the pause,
+        // and drop any in-flight two-tick keep-alive event.
+        battery_idle_since_us  = -1_us;
+        keepalive_pending_zero = false;
         // Operator takeover. (Idempotent if already cleared by pause.)
         modbus_force_w = 0;
         modbus_op_mod  = SMA_OPMOD_DEFAULT;

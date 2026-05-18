@@ -759,6 +759,30 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                             switch_label_min_width="110px"/>
                     </FormRow>
 
+                    <FormRow label={__("sbse_controller.content.keepalive_interval_s")}
+                             help={__("sbse_controller.content.keepalive_interval_s_help")}>
+                        <SwitchableInputNumber
+                            switch_label_active={__("sbse_controller.content.enabled_label")}
+                            switch_label_inactive={__("sbse_controller.content.disabled_label")}
+                            checked={state.keepalive_interval_s > 0}
+                            onClick={() => this.setState({
+                                keepalive_interval_s: state.keepalive_interval_s > 0 ? 0 : 480,
+                            })}
+                            value={state.keepalive_interval_s}
+                            onValue={(v) => this.setState({keepalive_interval_s: v})}
+                            min={60}
+                            max={1800}
+                            unit="s"
+                            switch_label_min_width="110px"/>
+                    </FormRow>
+
+                    <FormRow label={__("sbse_controller.content.keepalive_pulse_w")}
+                             help={__("sbse_controller.content.keepalive_pulse_w_help")}>
+                        <InputNumber min={0} max={500} unit="W"
+                                     value={state.keepalive_pulse_w}
+                                     onValue={this.set("keepalive_pulse_w")}/>
+                    </FormRow>
+
                     <FormSeparator heading={__("sbse_controller.content.section_modbus_server")}/>
 
                     <FormRow label={__("sbse_controller.content.modbus_server_enabled")}

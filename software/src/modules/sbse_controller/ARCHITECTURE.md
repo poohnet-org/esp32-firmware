@@ -184,13 +184,13 @@ compute_and_write()
  │
  │  if modbus_force_w != 0:                  # OpMod 2289 / 2290
  │     raw_setpoint = modbus_force_w         # (P + D bypassed)
- │  elif lo == hi:                           # hard mode: symmetric chase
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − lo) + Kd·d_ema_grid
- │  elif ema_grid > hi:                      # soft, rescue: discharge to hi
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − hi) + Kd·d_ema_grid
- │  else:                                    # soft, primary: charge to lo
- │     raw_setpoint = battery_w_raw + Kp·(ema_grid − lo) + Kd·d_ema_grid
- │     if raw_setpoint > 0: raw_setpoint = 0 # never discharge to chase lo
+ │  else:                                    # P + implicit-I + D, regime-aware
+ │     natural_grid = ema_grid + battery_w_raw   # grid if battery=0 (= load − PV)
+ │     target       = clamp(natural_grid, lo, hi)
+ │     raw_setpoint = battery_w_raw + Kp·(ema_grid − target) + Kd·d_ema_grid
+ │     # direction lock: each active regime only acts in its natural direction
+ │     if natural_grid > hi and raw_setpoint < 0: raw_setpoint = 0   # don't charge to chase hi
+ │     if natural_grid < lo and raw_setpoint > 0: raw_setpoint = 0   # don't discharge to chase lo
  │
  │  clamp by SoC (100 % blocks charge, 0 % blocks discharge)
  │  clamp by [-max_charge_w, +max_discharge_w]
@@ -198,7 +198,11 @@ compute_and_write()
  │
  │  trace_history.add_sample(...)      (1 Hz throttle inside)
  │
- │  if |target − last_written_w| < deadband_w  → skip write
+ │  # Keep-alive: override target_w with ±keepalive_pulse_w if battery
+ │  # has been idle for ≥ keepalive_interval_s and target_w would be 0
+ │  # (skipped under force-mode / pause / safety).
+ │
+ │  if !keepalive and |target − last_written_w| < deadband_w  → skip write
  │  else  → send_setpoint(target)              → write 41467 (4 reg)
  ▼
 finish_cycle(mode)   ── publishes the mode pill on the dashboard

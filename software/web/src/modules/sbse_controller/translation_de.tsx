@@ -108,6 +108,12 @@ let x = {
             "safety_zero_after_failures":      "Sicherheits-Null nach N Lesefehlern",
             "safety_zero_after_failures_help": <>Nach so vielen aufeinanderfolgenden Lesefehlern setzt der Regler einmalig den Sollwert auf 0 W und bleibt im Sicherheitsmodus, bis das Lesen wieder funktioniert. Auf 0 setzen, um diese Sicherung zu deaktivieren.</>,
 
+            "keepalive_interval_s":      "Standby-Keepalive-Intervall",
+            "keepalive_interval_s_help": <>Der SBSE-Wechselrichter geht nach ca. 10–15 Minuten ohne Batterieleistung in einen Standby-Modus und benötigt anschließend ca. 20–30 s, bis er einem neuen Sollwert folgt. Um ihn „wach" zu halten, sendet der Regler in regelmäßigen Abständen einen kleinen Impuls (siehe <em>Keepalive-Impulshöhe</em> weiter unten), sobald die Batterie ohne Unterbrechung diese Zeit lang inaktiv war. Standard 480 s = 8 min liegt komfortabel unterhalb der Standby-Schwelle. Deaktivieren, um den Wechselrichter regulär in Standby gehen zu lassen – sinnvoll bei niedrigen Leerlaufverlusten, wenn die Anlaufverzögerung egal ist.</>,
+
+            "keepalive_pulse_w":      "Keepalive-Impulshöhe",
+            "keepalive_pulse_w_help": <>Wie groß jeder Keepalive-Impuls ist. Die Impulsrichtung wechselt sich zwischen aufeinanderfolgenden Auslösungen ab, sodass der langfristige Energiebeitrag im Mittel null ergibt. Jeder Impuls dauert genau einen Tick (typ. 300 ms); die tatsächlich bewegte Energie liegt im Millijoule-Bereich – weit unterhalb der Rauschschwelle einer Zelle. Der Standardwert <code>50 W</code> ist groß genug, um vom Wechselrichter als „Batterie aktiv" registriert zu werden, aber im Netz unsichtbar. Auf <code>0</code> setzen, um Keepalive zu deaktivieren, ohne das Intervall zu verändern.</>,
+
             "section_modbus_server":           "Modbus-TCP-Server (externe Steuerung)",
             "modbus_server_enabled":           "Modbus-TCP-Server",
             "modbus_server_enabled_desc":      "SMA-kompatible Sollwert-Schreibvorgänge entgegennehmen",
