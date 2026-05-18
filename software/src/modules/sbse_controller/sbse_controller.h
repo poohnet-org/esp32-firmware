@@ -96,6 +96,7 @@ private:
     void send_setpoint(int32_t watts);
     void send_zero_w();        // fire-and-forget 0 W write, used by pause + pre_reboot
     void send_safety_zero();
+    int32_t pick_keepalive_pulse();  // alternating-sign small pulse, respecting SoC + caps
 
     // SMA Modbus TCP server -- the server class itself is just the protocol
     // adapter; these methods carry the semantics (sticky OpMod, force-mode,
@@ -147,6 +148,13 @@ private:
     float    alpha_setpoint     = 0.70f;
     int32_t  deadband_w         = 50;
     uint32_t safety_zero_after_failures = 5;  // 0 disables the safety net
+    // Inverter standby keep-alive. The SBSE inverter enters a low-power
+    // standby after ~10-15 min of battery_w_raw == 0, then needs ~20-30 s
+    // to wake up the next time a non-zero setpoint is written. To keep it
+    // warm, the controller emits a small alternating pulse (+/- keepalive_pulse_w)
+    // every keepalive_interval_s of continuous battery idle. 0 disables.
+    uint32_t keepalive_interval_s = 480;     // 0 disables; default 8 min (under the ~10-15 min standby threshold)
+    int32_t  keepalive_pulse_w    = 50;
 
     // SMA Modbus TCP server -- the network/protocol adapter. Its persistent
     // config is mirrored into the controller's cached fields below so the
@@ -196,6 +204,17 @@ private:
     uint32_t write_err_count    = 0;
     uint32_t consecutive_failures = 0;
     bool     safety_zero_armed  = false;
+
+    // Keep-alive bookkeeping. battery_idle_since_us is reset whenever the
+    // most recent battery_w_raw read is non-zero; the keep-alive trigger
+    // fires when (now_us - battery_idle_since_us) >= keepalive_interval_s.
+    // The direction toggles between successive pulses so the long-run energy
+    // contribution averages to zero. A keep-alive event spans two ticks:
+    // the pulse itself, then a forced 0 W return so the inverter is wound
+    // back to idle regardless of pulse magnitude vs deadband_w.
+    micros_t battery_idle_since_us  = -1_us;
+    bool     keepalive_next_charge  = false;
+    bool     keepalive_pending_zero = false;  // next cycle: force a 0 W return write
 
     // --- Modbus staging buffers (per-cycle, owned by the module) ---
     // Sized via the BUF_*_LEN constants above; the static_asserts in
