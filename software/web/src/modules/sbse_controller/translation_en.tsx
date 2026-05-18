@@ -108,6 +108,12 @@ let x = {
             "safety_zero_after_failures":      "Safety-zero after N failed reads",
             "safety_zero_after_failures_help": <>After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters the safety mode until reads recover. Disable to leave the last setpoint in place forever during outages.</>,
 
+            "keepalive_interval_s":      "Standby keep-alive interval",
+            "keepalive_interval_s_help": <>The SBSE inverter enters a low-power standby after ~10-15 minutes of zero battery output, then needs ~20-30 s to wake up the next time a non-zero setpoint is written. To keep it warm, the controller emits a small alternating-sign pulse (see <em>keep-alive pulse magnitude</em> below) every <code>keepalive_interval_s</code> of continuous battery idle. Default 480 s = 8 min comfortably stays below the standby threshold. Disable to let the inverter standby normally — useful if you want lower idle losses and don't mind the wake-up lag.</>,
+
+            "keepalive_pulse_w":      "Keep-alive pulse magnitude",
+            "keepalive_pulse_w_help": <>How big each keep-alive pulse is. The pulse alternates sign between successive fires so the long-run energy contribution averages to zero. Each pulse lasts exactly one tick (typ. 300 ms), so the actual energy moved is in the millijoule range — well under a cell's noise floor. Default <code>50 W</code> is large enough to register as "battery active" on the inverter but small enough to be invisible on the grid. Set to <code>0</code> to disable keep-alive without touching the interval setting.</>,
+
             "section_modbus_server":           "Modbus TCP server (external control)",
             "modbus_server_enabled":           "Modbus TCP server",
             "modbus_server_enabled_desc":      "Accept external SMA-compatible setpoint writes",

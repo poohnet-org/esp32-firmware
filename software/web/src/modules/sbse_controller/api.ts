@@ -14,6 +14,8 @@ export interface config {
     alpha_setpoint_milli: number;
     deadband_w: number;
     safety_zero_after_failures: number;
+    keepalive_interval_s: number;
+    keepalive_pulse_w: number;
     modbus_server_enabled: boolean;
     modbus_server_port: number;
     modbus_server_unit_id: number;
@@ -32,6 +34,8 @@ export interface active_config {
     alpha_setpoint_milli: number;
     deadband_w: number;
     safety_zero_after_failures: number;
+    keepalive_interval_s: number;
+    keepalive_pulse_w: number;
 }
 
 export interface state {

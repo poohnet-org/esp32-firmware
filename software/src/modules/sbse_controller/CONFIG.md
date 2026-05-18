@@ -57,6 +57,8 @@ identical semantics:
 | `alpha_setpoint_milli` | `700` (= α 0.70) | α × 1000, 10…1000 | **EMA on the commanded battery setpoint** (post-controller, pre-write). Smooths the output to the inverter so noisy grid readings don't produce flickery commands. |
 | `deadband_w` | `50` | W, 0…1000 | **Write-suppression threshold.** If the new computed setpoint is within ±`deadband_w` of the last commanded one, the Modbus write is skipped (inverter holds the last value). Cuts cell churn and bus traffic at idle. SBSE has no internal-control fallback, so generous deadbands are safe. |
 | `safety_zero_after_failures` | `5` | count, 0…100 | **Safety net.** After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters `mode: safety` until reads recover. At default 300 ms tick × 5 → ~1.5 s trip latency. `0` disables the safety net (last setpoint held forever during outages). |
+| `keepalive_interval_s` | `480` | seconds, 0…1800 | **Standby keep-alive interval.** The SBSE inverter enters a low-power standby after ~10-15 min of zero battery output, then needs ~20-30 s to wake up the next time a non-zero setpoint is written. Every `keepalive_interval_s` of continuous battery idle, the controller emits a single-tick alternating-sign pulse of `±keepalive_pulse_w` to keep the inverter warm. Default 480 s = 8 min keeps comfortably below the standby threshold. `0` disables keep-alive and lets standby happen normally (lower idle losses, 20-30 s wake-up lag). |
+| `keepalive_pulse_w` | `50` | W, 0…500 | **Keep-alive pulse magnitude.** Direction alternates between successive pulses so the long-run energy contribution averages to zero. One tick (typ. 300 ms) per pulse → millijoule-scale energy per fire. SoC clamps (0% blocks discharge, 100% blocks charge) and the `max_charge_w` / `max_discharge_w` caps apply; if a pulse cannot fire in the chosen direction, the controller tries the other before giving up for the cycle. `0` disables keep-alive without touching the interval. |
 
 ## Read-only state (`sbse_controller/state`)
 
@@ -228,10 +230,27 @@ controller will charge *or* discharge as needed to hit the target.
 
 ### Soft mode (`lo < hi`)  -- asymmetric
 
-| Where is `ema_grid`? | What the controller does |
+Branching happens on the **natural grid** -- where the grid would sit if
+the battery were idle right now:
+
+```
+natural_grid = ema_grid + battery_w_raw   (algebraically = home_load - PV)
+```
+
+| Where is `natural_grid`? | What the controller does |
 |---|---|
-| `ema_grid > hi` | **Chase `hi` by discharging.** Standard P + I + D law with `hi` as the target. Discharge is allowed up to `max_discharge_w`. |
-| `ema_grid ≤ hi` | **Chase `lo` by charging only.** Same P + I + D law with `lo` as the target, but the output is clamped to `≤ 0` -- the controller is forbidden from discharging just to pursue `lo`. If charging less than 0 won't reach `lo` (i.e. PV is too weak), the battery simply stays at 0 and the grid drifts up rather than burning battery to pad the export. |
+| `natural_grid > hi` | **Chase `hi` by discharging.** P+I+D law with `hi` as the target. Direction-locked: the controller never charges while in this regime, so a noise-driven ema dip below `hi` while the battery is actively sourcing load doesn't slam the setpoint through zero. |
+| `natural_grid < lo` | **Chase `lo` by charging.** P+I+D law with `lo` as the target. Direction-locked: the controller never discharges in this regime, preserving the "never burn battery to pad export" rule. If PV alone isn't enough to reach `lo`, the formula winds the battery's charge down toward 0 and grid drifts toward `natural_grid` rather than further down to `lo`. |
+| `lo ≤ natural_grid ≤ hi` | **Deadzone.** The effective target is `natural_grid` itself, so the P term vanishes (`delta = 0`) and the formula reduces to `raw = battery_w_raw + Kd · Δema_grid`. The implicit-I via `battery_w_raw` lets any leftover battery commitment wind down toward 0 across a few cycles (with `Kp = 1`, the next setpoint is exactly 0); the D term still anticipates a fast load step that would push the grid out of the deadzone. |
+
+Branching on `natural_grid` (rather than on `ema_grid` alone) keeps the
+control law **continuous at the deadzone boundaries** even when the
+battery is actively responding. In steady-state operation with `load > PV`
+the battery is discharging at `load − PV` watts and the grid sits at
+`hi`; small ema-grid noise jitters `ema_grid` around `hi` but
+`natural_grid` stays comfortably above `hi` (the battery's contribution
+dominates), so the controller stays in the "chase `hi`" regime and the
+setpoint tracks smoothly.
 
 This implements your stated intent:
 
@@ -241,23 +260,15 @@ This implements your stated intent:
 > discharged before drawing power from the grid."
 
 Mapping:
-- "excess PV first goes to the grid up to the target": that's `lo` and
-  is chased actively by charging.
+- "excess PV first goes to the grid up to the target": that's `lo`,
+  chased actively by charging only.
 - "remaining PV goes to the battery": natural consequence of chasing
-  `lo` (when PV surplus is large, charging is the only way to keep grid
-  at `lo`).
-- "battery discharged before drawing power from the grid": that's the
-  `hi` rescue. Typically `hi = 0` ("don't import"); a non-zero `hi`
-  means "I'm willing to lose up to `−hi W` of net export before
-  the battery starts discharging to keep at least that much export
-  going" (or, for positive `hi`, "I tolerate up to `hi W` of import
-  before the battery kicks in").
-
-The boundary at `hi` is smooth in the typical steady-state transition
-(battery is near 0 by the time grid reaches `hi` from below, so both
-branches agree). Fast load steps that jump across `hi` while the battery
-is still actively charging see a small step in the commanded setpoint;
-the output EMA softens it.
+  `lo` when PV surplus exceeds `|lo|` watts.
+- "battery discharged before drawing power from the grid": that's `hi`,
+  the rescue threshold. Typically `hi = 0` ("don't import"); a non-zero
+  `hi` means "I'm willing to lose up to `−hi W` of net export before
+  the battery starts discharging" (or, for positive `hi`, "I tolerate up
+  to `hi W` of import before the battery kicks in").
 
 ### Examples
 
@@ -267,31 +278,42 @@ The controller chases grid = 0 in both directions. Any PV surplus →
 battery charges. Any house deficit → battery discharges. Grid stays
 near 0.
 
+All example tables below use `natural_grid` -- the value `home_load − PV`,
+i.e. the grid reading the meter would show if the battery were
+instantaneously idle. The "Result" column is the steady-state outcome
+after the controller has converged from `battery = 0`.
+
 #### `lo = -200, hi = 0`  (export-preferred self-consumption)
 
-| Grid without battery action | Result |
+| `natural_grid` | Result |
 |---|---|
 | `-500 W` (PV surplus of 500) | charge 300 W → grid `-200` *(chasing `lo`)* |
-| `-100 W` (small PV surplus) | chase `lo` wants discharge → **clamped, battery stays at 0** → grid stays `-100` |
-| `0 W` (balanced) | chase `lo` wants discharge → **clamped, battery stays at 0** → grid stays `0` |
-| `+500 W` (PV deficit of 500) | discharge 500 W → grid `0` *(chasing `hi`, **no further into export**)* |
+| `-100 W` (in deadzone) | battery idle → grid stays at `-100` |
+| `0 W` (at `hi` boundary) | battery idle → grid stays at `0` |
+| `+500 W` (PV deficit of 500) | discharge 500 W → grid `0` *(chasing `hi`)* |
 
 #### `lo = -720, hi = -500`  (maintain export, with a 500 W discharge rescue)
 
-| Grid without battery action | Result |
+| `natural_grid` | Result |
 |---|---|
 | `-900 W` (large PV surplus) | charge 180 W → grid `-720` *(chasing `lo`)* |
-| `-700 W` | battery active and charging → ramps to charge a touch more → grid drops to `-720` |
-| `-600 W` (PV starting to drop) | chase `lo` wants less charge; battery ramps toward 0; grid drifts up |
-| `-500 W` (PV further down) | battery has reached 0; chase `lo` clamped → grid drifts above `hi` |
-| `-400 W` (PV well below the export target) | chase `hi` engages → discharge 100 W → grid back to `-500` |
+| `-700 W` (in deadzone) | battery idle → grid stays at `-700` |
+| `-600 W` (in deadzone) | battery idle → grid stays at `-600` |
+| `-500 W` (at `hi` boundary) | battery idle → grid stays at `-500` |
+| `-400 W` (PV well below the export target) | discharge 100 W → grid `-500` *(chasing `hi`, the rescue)* |
 
 This is your live setup. The `lo` target is "ideal export"; `hi` is
 "minimum acceptable export before the battery starts paying for it".
+Note that the deadzone is "passive" in steady state -- the controller
+neither charges nor discharges -- but a transient with the battery
+*entering* the deadzone in a non-idle state (e.g. PV dropped from
+"surplus > 720 W" to "surplus = 600 W" while battery was charging
+180 W) is gracefully wound down to idle over a few cycles by the
+implicit-I term in the formula.
 
 #### `lo = hi = -200`  (hard: maintain 200 W export at all costs)
 
-| Grid without battery action | Result |
+| `natural_grid` | Result |
 |---|---|
 | `-500 W` | charge 300 W → grid `-200` |
 | `-100 W` | discharge 100 W → grid `-200` *(symmetric chase, hard mode allows it)* |
@@ -299,10 +321,10 @@ This is your live setup. The `lo` target is "ideal export"; `hi` is
 
 #### `lo = 0, hi = +500`  (allow up to 500 W import before discharging)
 
-| Grid without battery action | Result |
+| `natural_grid` | Result |
 |---|---|
 | `-100 W` (small PV surplus) | charge 100 W → grid `0` *(absorb surplus, don't export)* |
-| `+200 W` (importing 200) | chase `hi` wants no action (already below) → **battery stays at 0** → grid stays `+200` |
+| `+200 W` (in deadzone) | battery idle → grid stays at `+200` |
 | `+800 W` (importing 800) | discharge 300 W → grid `+500` *(chasing `hi`)* |
 
 ### Other interactions
@@ -337,16 +359,17 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   if modbus_force_w != 0:                          ── SMA OpMod 2289 / 2290
     raw_setpoint = modbus_force_w                  ── (P+D bypassed)
-  elif lo == hi:                                   ── hard mode: symmetric chase
-    delta        = ema_grid − lo
+  else:                                            ── P + implicit-I + D, regime-aware
+    natural_grid = ema_grid + battery_now          ── grid if battery=0; = load − PV
+    target       = clamp(natural_grid, lo, hi)     ── hi above the deadzone,
+                                                     ── lo below, natural_grid inside
+    delta        = ema_grid − target
     raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
-  elif ema_grid > hi:                              ── soft, rescue: chase hi via discharge
-    delta        = ema_grid − hi
-    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
-  else:                                            ── soft, primary: chase lo via charge
-    delta        = ema_grid − lo
-    raw_setpoint = battery_now + Kp · delta + Kd · d_ema_grid
-    if raw_setpoint > 0: raw_setpoint = 0          ── never discharge to chase lo
+
+    if natural_grid > hi and raw_setpoint < 0:     ── direction lock: discharging regime
+      raw_setpoint = 0                                ── never charge to chase hi
+    if natural_grid < lo and raw_setpoint > 0:     ── direction lock: charging regime
+      raw_setpoint = 0                                ── never discharge to chase lo
 
   raw_setpoint   = clamp(raw_setpoint, by SoC: 100 % blocks charge, 0 % blocks discharge)
   raw_setpoint   = clamp(raw_setpoint, −max_charge_w, +max_discharge_w)
@@ -355,7 +378,13 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   trace_history.add_sample(grid_ema, battery_now, last_written_w, lo, hi)  ── 1 Hz internal throttle
 
-  if |target_w − last_written_w| < deadband_w → skip write (inverter holds last setpoint)
+  ── Keep-alive heartbeat: if target_w == 0 and battery_w_raw has been
+  ── idle for keepalive_interval_s, override with a small alternating
+  ── pulse (±keepalive_pulse_w) to prevent inverter standby.
+  if keepalive due:  target_w = ±keepalive_pulse_w
+
+  if !keepalive_pulse and |target_w − last_written_w| < deadband_w
+                                              → skip write (inverter holds last setpoint)
   else                                          → write target_w to POWER_SETPOINT_ADDR (unit 3)
 
   if read_fail_streak == safety_zero_after_failures → write 0 W, mode = safety
