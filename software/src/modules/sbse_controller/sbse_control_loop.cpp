@@ -506,8 +506,21 @@ void SbseController::compute_and_write()
     //    skip the write -- the SBSE holds the last commanded setpoint
     //    indefinitely (no internal-control fallback), so there is no
     //    watchdog to satisfy. This cuts write traffic and cell churn.
-    //    Keep-alive bypasses the deadband on both its pulse and its return.
-    const bool bypass_deadband = keepalive_fired || keepalive_return;
+    //
+    //    Three exceptions bypass the deadband:
+    //      - the keep-alive pulse (target_w replaced with +/- pulse W),
+    //      - the keep-alive return (target_w forced back to 0 next tick),
+    //      - the active refresh: if the most recent write is older than
+    //        keepalive_interval_s, re-assert target_w even when its value
+    //        is within deadband_w of the last commanded one. Together with
+    //        the idle-pulse path this caps the silent-write gap at the
+    //        keep-alive interval whether the battery is active or idle.
+    const bool keepalive_refresh_due =
+        keepalive_interval_s > 0
+        && last_write_ok != -1_us
+        && deadline_elapsed(last_write_ok
+                            + micros_t{static_cast<int64_t>(keepalive_interval_s) * 1000000LL});
+    const bool bypass_deadband = keepalive_fired || keepalive_return || keepalive_refresh_due;
     if (!bypass_deadband
         && last_write_ok != -1_us
         && std::abs(target_w - last_written_w) < deadband_w) {

@@ -198,11 +198,15 @@ compute_and_write()
  │
  │  trace_history.add_sample(...)      (1 Hz throttle inside)
  │
- │  # Keep-alive: override target_w with ±keepalive_pulse_w if battery
- │  # has been idle for ≥ keepalive_interval_s and target_w would be 0
- │  # (skipped under force-mode / pause / safety).
+ │  # Keep-alive, two paths sharing keepalive_interval_s:
+ │  #   idle pulse  -- if target_w would be 0 and battery has been idle
+ │  #                  for the interval, override with ±keepalive_pulse_w.
+ │  #   refresh     -- if last_write_ok is older than the interval, bypass
+ │  #                  the deadband and re-assert target_w as-is.
+ │  # (Both gated behind force-mode / pause / safety branches above.)
  │
- │  if !keepalive and |target − last_written_w| < deadband_w  → skip write
+ │  if !keepalive_pulse and !keepalive_refresh
+ │     and |target − last_written_w| < deadband_w               → skip write
  │  else  → send_setpoint(target)              → write 41467 (4 reg)
  ▼
 finish_cycle(mode)   ── publishes the mode pill on the dashboard
