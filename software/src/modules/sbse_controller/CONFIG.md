@@ -57,7 +57,7 @@ identical semantics:
 | `alpha_setpoint_milli` | `700` (= α 0.70) | α × 1000, 10…1000 | **EMA on the commanded battery setpoint** (post-controller, pre-write). Smooths the output to the inverter so noisy grid readings don't produce flickery commands. |
 | `deadband_w` | `50` | W, 0…1000 | **Write-suppression threshold.** If the new computed setpoint is within ±`deadband_w` of the last commanded one, the Modbus write is skipped (inverter holds the last value). Cuts cell churn and bus traffic at idle. SBSE has no internal-control fallback, so generous deadbands are safe. |
 | `safety_zero_after_failures` | `5` | count, 0…100 | **Safety net.** After this many consecutive failed read cycles, the controller commands a one-shot 0 W setpoint and enters `mode: safety` until reads recover. At default 300 ms tick × 5 → ~1.5 s trip latency. `0` disables the safety net (last setpoint held forever during outages). |
-| `keepalive_interval_s` | `480` | seconds, 0…1800 | **Standby keep-alive interval.** The SBSE inverter enters a low-power standby after ~10-15 min of zero battery output, then needs ~20-30 s to wake up the next time a non-zero setpoint is written. Every `keepalive_interval_s` of continuous battery idle, the controller emits a single-tick alternating-sign pulse of `±keepalive_pulse_w` to keep the inverter warm. Default 480 s = 8 min keeps comfortably below the standby threshold. `0` disables keep-alive and lets standby happen normally (lower idle losses, 20-30 s wake-up lag). |
+| `keepalive_interval_s` | `480` | seconds, 0…1800 | **Keep-alive / write-watchdog interval.** Covers two complementary behaviours, both keyed off this single setting: (1) the SBSE inverter enters a low-power standby after ~10-15 min of zero battery output (then needs ~20-30 s to wake on the next non-zero setpoint), so every `keepalive_interval_s` of continuous battery idle the controller emits a single-tick alternating-sign pulse of `±keepalive_pulse_w` to keep it warm; (2) when the battery is active but the controller's setpoint sits inside the write deadband for longer than the interval (steady operation, force-mode at a constant value, …), the controller refreshes the current `target_w` to cap the silent-write gap at `keepalive_interval_s`. Default 480 s = 8 min comfortably below the standby threshold. `0` disables both behaviours (lower idle losses + cleaner write log, in exchange for the 20-30 s wake-up lag). |
 | `keepalive_pulse_w` | `50` | W, 0…500 | **Keep-alive pulse magnitude.** Direction alternates between successive pulses so the long-run energy contribution averages to zero. One tick (typ. 300 ms) per pulse → millijoule-scale energy per fire. SoC clamps (0% blocks discharge, 100% blocks charge) and the `max_charge_w` / `max_discharge_w` caps apply; if a pulse cannot fire in the chosen direction, the controller tries the other before giving up for the cycle. `0` disables keep-alive without touching the interval. |
 
 ## Read-only state (`sbse_controller/state`)
@@ -378,12 +378,17 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   trace_history.add_sample(grid_ema, battery_now, last_written_w, lo, hi)  ── 1 Hz internal throttle
 
-  ── Keep-alive heartbeat: if target_w == 0 and battery_w_raw has been
-  ── idle for keepalive_interval_s, override with a small alternating
-  ── pulse (±keepalive_pulse_w) to prevent inverter standby.
-  if keepalive due:  target_w = ±keepalive_pulse_w
+  ── Keep-alive heartbeat. Two paths, both keyed off keepalive_interval_s:
+  ── - idle pulse: if target_w == 0 and battery_w_raw has been idle for
+  ──   the interval, override with a small alternating ±keepalive_pulse_w
+  ──   to keep the inverter out of standby.
+  ── - active refresh: if last_write_ok is older than the interval, bypass
+  ──   the deadband and re-assert target_w as-is. Caps the silent-write
+  ──   gap at keepalive_interval_s whether the battery is active or idle.
+  if keepalive_pulse due:  target_w = ±keepalive_pulse_w
 
-  if !keepalive_pulse and |target_w − last_written_w| < deadband_w
+  if !keepalive_pulse and !keepalive_refresh
+                       and |target_w − last_written_w| < deadband_w
                                               → skip write (inverter holds last setpoint)
   else                                          → write target_w to POWER_SETPOINT_ADDR (unit 3)
 
