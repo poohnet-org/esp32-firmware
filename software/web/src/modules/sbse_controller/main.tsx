@@ -667,7 +667,9 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
 
                     <FormRow label={__("sbse_controller.content.host")}
                              help={__("sbse_controller.content.host_help")}>
-                        <InputHost value={state.host} onValue={this.set("host")}/>
+                        <InputHost maxLength={64}
+                                   value={state.host}
+                                   onValue={this.set("host")}/>
                     </FormRow>
 
                     <FormRow label={__("sbse_controller.content.port")}
