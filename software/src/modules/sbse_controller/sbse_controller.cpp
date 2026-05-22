@@ -170,6 +170,10 @@ void SbseController::pre_setup()
         {"modbus_active",     Config::Bool(false)},
         {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
         {"modbus_force_w",    Config::Int32(0)},
+        // Bumped on every Modbus read (FC 3 / FC 4) served by the proxy
+        // cache. The dashboard watches this for state changes to drive its
+        // read-activity LED.
+        {"modbus_read_count", Config::Uint32(0)},
         {"last_error",        Config::Str("", 0, 64)},
     });
 }
@@ -587,7 +591,15 @@ TFModbusTCPExceptionCode SbseController::on_modbus_read(
         /* battery_w_raw */ battery_w_raw,
         /* soc_pct       */ soc_pct,
     };
-    return modbus_proxy.pack_response(fc, start_address, reg_count, out_regs, inputs);
+    const TFModbusTCPExceptionCode rc =
+        modbus_proxy.pack_response(fc, start_address, reg_count, out_regs, inputs);
+
+    // Bump the read counter so the dashboard's read-activity LED can flash.
+    // Tick every served request -- the value's a free-running counter, the
+    // frontend only watches for changes.
+    ++modbus_read_count;
+    state.get("modbus_read_count")->updateUint(modbus_read_count);
+    return rc;
 }
 
 void SbseController::revert_modbus_overrides()
