@@ -111,17 +111,20 @@ function SoftHardBadge({lo, hi}: {lo: number, hi: number}) {
     );
 }
 
-// Modbus read-activity LED. Renders a small dot in the status card header
-// that briefly pulses green every time the proxy serves a read (FC 3 / FC 4)
-// to evcc or any other client. The `key` prop forces React to remount the
-// element on every read, which restarts the CSS animation from frame zero
-// -- so rapid bursts of reads produce distinct flashes instead of one
-// continuous glow.
-function ReadActivityLED({pulse_key}: {pulse_key: number}) {
+// Modbus activity LED. Renders a small dot in the status card header that
+// briefly pulses every time the controller serves a Modbus transaction:
+// green on reads (FC 3 / FC 4), red on writes (FC 16). `count` doubles as
+// React's `key` -- bumping it remounts the element so the CSS animation
+// restarts from frame zero on every event (distinct flashes for bursts) --
+// and as the running total shown in the tooltip.
+function ActivityLED({count, kind}: {count: number, kind: "read" | "write"}) {
+    const label = kind === "read"
+        ? __("sbse_controller.status.read_led_help_title")
+        : __("sbse_controller.status.write_led_help_title");
     return (
-        <span class="sbse-read-led"
-              key={pulse_key}
-              title={__("sbse_controller.status.read_led_help_title")}/>
+        <span class={`sbse-led sbse-led-${kind}`}
+              key={count}
+              title={`${label} (${util.toLocaleFixed(count, 0)})`}/>
     );
 }
 
@@ -421,7 +424,8 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
                         <div class="d-flex align-items-center gap-2">
-                            <ReadActivityLED pulse_key={st.modbus_read_count ?? 0}/>
+                            <ActivityLED kind="read"  count={st.modbus_read_count  ?? 0}/>
+                            <ActivityLED kind="write" count={st.modbus_write_count ?? 0}/>
                             <SoftHardBadge lo={ac.grid_charge_target_w}
                                            hi={ac.grid_discharge_target_w}/>
                             {st.modbus_active ?
