@@ -28,6 +28,7 @@
 #include "config.h"
 #include "module.h"
 #include "modules/network_lib/generic_tcp_client_pool_connector.h"
+#include "sbse_modbus_proxy.h"
 #include "sbse_modbus_server.h"
 #include "sbse_trace_history.h"
 
@@ -102,10 +103,22 @@ private:
     // adapter; these methods carry the semantics (sticky OpMod, force-mode,
     // active_config wiring, watchdog).
     TFModbusTCPExceptionCode on_modbus_op_mod_write(uint32_t op_mod);
-    TFModbusTCPExceptionCode on_modbus_setpoint_write(const uint16_t *regs10);
-    void apply_modbus_setpoint_block(const uint16_t *data_values);
+    TFModbusTCPExceptionCode on_modbus_setpoint_write(uint16_t start_address,
+                                                      uint16_t reg_count,
+                                                      const uint16_t *regs);
+    TFModbusTCPExceptionCode on_modbus_read(TFModbusTCPFunctionCode fc,
+                                            uint16_t start_address,
+                                            uint16_t reg_count,
+                                            uint16_t *out_regs);
+    void apply_modbus_setpoint_partial(uint16_t start_address,
+                                       uint16_t reg_count,
+                                       const uint16_t *regs);
     void revert_modbus_overrides();      // watchdog expiry / operator takeover
     void watchdog_tick();
+
+    // Proxy register cache for the SMA-hybrid read set. Polled on its own
+    // scheduled tick, served by on_modbus_read().
+    void run_proxy_poll();
     void cycle_failed(const char *where,
                       TFModbusTCPClientTransactionResult result,
                       const char *error_message);
@@ -165,6 +178,12 @@ private:
     uint8_t  modbus_server_unit_id    = 3;       // 0 = accept any unit id
     uint32_t modbus_server_watchdog_ms = 60000;  // 0 disables
     ModbusAuthority modbus_server_authority = ModbusAuthority::Caps;
+
+    // Register cache that backs the FC 3 / FC 4 reads. Synthesizes the four
+    // hot values from controller state, polls the rest from the appropriate
+    // upstream unit -- see sbse_modbus_proxy.cpp for the group table.
+    SbseModbusProxy modbus_proxy;
+    uint64_t modbus_proxy_task_id = 0;
 
     // Sticky OpMod (40236) latched between writes. 2424 = Default/Normal (P loop).
     // 2289 = Battery charging (force-charge). 2290 = Battery discharging.

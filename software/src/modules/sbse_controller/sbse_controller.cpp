@@ -392,13 +392,26 @@ void SbseController::register_events()
         [this](uint32_t op_mod) {
             return this->on_modbus_op_mod_write(op_mod);
         },
-        [this](const uint16_t *regs10) {
-            return this->on_modbus_setpoint_write(regs10);
+        [this](uint16_t start_address, uint16_t reg_count, const uint16_t *regs) {
+            return this->on_modbus_setpoint_write(start_address, reg_count, regs);
+        },
+        [this](TFModbusTCPFunctionCode fc, uint16_t start_address,
+               uint16_t reg_count, uint16_t *out_regs) {
+            return this->on_modbus_read(fc, start_address, reg_count, out_regs);
         });
     modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
     if (modbus_server_enabled) {
         modbus_server.start();
     }
+
+    // Drive the proxy register cache. Refresh cadence is slower than the
+    // control loop's so it doesn't compete with grid/battery/SoC reads, but
+    // fast enough that cumulative energies and per-phase numbers stay
+    // current for any evcc poll cycle. With ~9 cached groups this gives a
+    // full refresh every ~4.5 s.
+    modbus_proxy_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
+        this->run_proxy_poll();
+    }, 500_ms, 500_ms);
 }
 
 void SbseController::pre_reboot()
@@ -406,6 +419,10 @@ void SbseController::pre_reboot()
     if (tick_task_id != 0) {
         task_scheduler.cancel(tick_task_id);
         tick_task_id = 0;
+    }
+    if (modbus_proxy_task_id != 0) {
+        task_scheduler.cancel(modbus_proxy_task_id);
+        modbus_proxy_task_id = 0;
     }
 
     modbus_server.stop();
@@ -452,41 +469,68 @@ TFModbusTCPExceptionCode SbseController::on_modbus_op_mod_write(uint32_t op_mod)
     return TFModbusTCPExceptionCode::Success;
 }
 
-TFModbusTCPExceptionCode SbseController::on_modbus_setpoint_write(const uint16_t *regs10)
+TFModbusTCPExceptionCode SbseController::on_modbus_setpoint_write(
+    uint16_t start_address, uint16_t reg_count, const uint16_t *regs)
 {
-    // 40793: 5 x U32BE -- handed off to the semantic layer which decodes
-    // the registers, applies the SMA OpMod interpretation, and mirrors
-    // values into active_config.
-    apply_modbus_setpoint_block(regs10);
+    // Setpoint sub-block at 40793..40802 (each field is U32BE = 2 regs).
+    // The server already validated that start_address is even-aligned to a
+    // uint32 boundary and that (start_address, reg_count) fits entirely
+    // within the 10-register window. We only act on the fields actually
+    // present in this write; absent fields keep their previous active_config
+    // values (matches evcc's piecemeal write pattern).
+    apply_modbus_setpoint_partial(start_address, reg_count, regs);
     return TFModbusTCPExceptionCode::Success;
 }
 
-void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
+void SbseController::apply_modbus_setpoint_partial(uint16_t start_address,
+                                                   uint16_t reg_count,
+                                                   const uint16_t *regs)
 {
-    // 40793: 5 x U32BE. Indices: [0]=BatChaMinW, [1]=BatChaMaxW,
-    // [2]=BatDchgMinW, [3]=BatDchgMaxW, [4]=GridWSpt.
-    auto u32 = [&](int i) -> uint32_t {
-        return (static_cast<uint32_t>(data_values[2 * i]) << 16) | data_values[2 * i + 1];
-    };
-    const uint32_t bat_cha_max  = u32(1);
-    const uint32_t bat_dchg_max = u32(3);
-    const int32_t  grid_spt     = static_cast<int32_t>(u32(4));
+    // SMA setpoint field indices within the 5x uint32 block at 40793:
+    //   0 = BatChaMinW    (ignored -- controller has no minimum-charge cap)
+    //   1 = BatChaMaxW
+    //   2 = BatDchgMinW   (ignored -- no minimum-discharge cap)
+    //   3 = BatDchgMaxW
+    //   4 = GridWSpt
+    constexpr uint16_t SETP_ADDR_LO = 40793;
+    const uint16_t first_field = static_cast<uint16_t>((start_address - SETP_ADDR_LO) / 2);
+    const uint16_t field_count = static_cast<uint16_t>(reg_count / 2);
+
+    bool      has_cha_max = false, has_dchg_max = false, has_grid_spt = false;
+    uint32_t  bat_cha_max = 0, bat_dchg_max = 0;
+    int32_t   grid_spt    = 0;
+
+    for (uint16_t i = 0; i < field_count; ++i) {
+        const uint32_t value = (static_cast<uint32_t>(regs[2 * i]) << 16) | regs[2 * i + 1];
+        switch (first_field + i) {
+            case 0: /* BatChaMinW  */ break;
+            case 1: bat_cha_max  = value;                       has_cha_max  = true; break;
+            case 2: /* BatDchgMinW */ break;
+            case 3: bat_dchg_max = value;                       has_dchg_max = true; break;
+            case 4: grid_spt     = static_cast<int32_t>(value); has_grid_spt = true; break;
+            default: break;
+        }
+    }
 
     // Clamp to the SBSE controller's own range. The Config types would reject
     // out-of-range values; we mirror their bounds here so the Modbus client
     // sees Success instead of a generic error.
     auto clamp_w = [](uint32_t v) -> uint32_t { return v > 10000u ? 10000u : v; };
-    const uint32_t max_charge_clamped    = clamp_w(bat_cha_max);
-    const uint32_t max_discharge_clamped = clamp_w(bat_dchg_max);
-    const int32_t  target_clamped        = std::clamp(grid_spt, int32_t{-750}, int32_t{2500});
+    const uint32_t cha_max_clamped  = clamp_w(bat_cha_max);
+    const uint32_t dchg_max_clamped = clamp_w(bat_dchg_max);
+    const int32_t  spt_clamped      = std::clamp(grid_spt, int32_t{-750}, int32_t{2500});
 
     // Interpret OpMod. Force modes bypass the P controller (see compute_and_write
     // step 3a). OpMod 2424 lets the P controller drive against the new caps and
-    // target.
+    // target. If a partial write didn't include the relevant max field, fall
+    // back to the controller's current cached cap so a single OpMod write
+    // immediately following GridWSpt still picks a sensible force value.
     if (modbus_op_mod == SMA_OPMOD_FORCE_CHARGE) {
-        modbus_force_w = -static_cast<int32_t>(max_charge_clamped);
+        const int32_t mag = has_cha_max ? static_cast<int32_t>(cha_max_clamped) : max_charge_w;
+        modbus_force_w = -mag;
     } else if (modbus_op_mod == SMA_OPMOD_FORCE_DISCHARGE) {
-        modbus_force_w =  static_cast<int32_t>(max_discharge_clamped);
+        const int32_t mag = has_dchg_max ? static_cast<int32_t>(dchg_max_clamped) : max_discharge_w;
+        modbus_force_w =  mag;
     } else {
         modbus_force_w = 0;
     }
@@ -504,17 +548,23 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
     //                                      operator's caps / targets stand.
     //                                      The force_w computed above is the
     //                                      only effect of this write.
+    bool dirty_active_config = false;
     if (modbus_server_authority >= ModbusAuthority::Caps) {
-        active_config.get("max_charge_w")   ->updateUint(max_charge_clamped);
-        active_config.get("max_discharge_w")->updateUint(max_discharge_clamped);
+        if (has_cha_max) {
+            active_config.get("max_charge_w")->updateUint(cha_max_clamped);
+            dirty_active_config = true;
+        }
+        if (has_dchg_max) {
+            active_config.get("max_discharge_w")->updateUint(dchg_max_clamped);
+            dirty_active_config = true;
+        }
     }
-    if (modbus_server_authority >= ModbusAuthority::Full) {
-        active_config.get("grid_charge_target_w")   ->updateInt(target_clamped);
-        active_config.get("grid_discharge_target_w")->updateInt(target_clamped);
+    if (modbus_server_authority >= ModbusAuthority::Full && has_grid_spt) {
+        active_config.get("grid_charge_target_w")   ->updateInt(spt_clamped);
+        active_config.get("grid_discharge_target_w")->updateInt(spt_clamped);
+        dirty_active_config = true;
     }
-    // ForceOnly mode doesn't touch active_config, so the cached fields are
-    // already in sync -- skip the refresh.
-    if (modbus_server_authority >= ModbusAuthority::Caps) {
+    if (dirty_active_config) {
         apply_runtime_from_active();
     }
 
@@ -522,6 +572,22 @@ void SbseController::apply_modbus_setpoint_block(const uint16_t *data_values)
     modbus_active        = true;
     state.get("modbus_active") ->updateBool(true);
     state.get("modbus_force_w")->updateInt (modbus_force_w);
+}
+
+TFModbusTCPExceptionCode SbseController::on_modbus_read(
+    TFModbusTCPFunctionCode fc, uint16_t start_address,
+    uint16_t reg_count, uint16_t *out_regs)
+{
+    // Server callback: pack the proxy cache + synthesized values into the
+    // response buffer. Synthesis inputs are the latest live samples from
+    // the control loop -- so SoC, grid, and battery W never lag behind the
+    // controller's most recent read.
+    const SbseModbusProxy::SynthesisInputs inputs{
+        /* grid_w_raw    */ grid_w_raw,
+        /* battery_w_raw */ battery_w_raw,
+        /* soc_pct       */ soc_pct,
+    };
+    return modbus_proxy.pack_response(fc, start_address, reg_count, out_regs, inputs);
 }
 
 void SbseController::revert_modbus_overrides()
