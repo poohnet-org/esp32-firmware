@@ -123,12 +123,25 @@ When `config.modbus_server_enabled = true`, the controller listens on `config.mo
 
 ### Accepted registers
 
-Only `WriteMultipleRegisters` (function code `16`) at exactly these two addresses is accepted. Everything else returns `IllegalFunction` or `IllegalDataAddress`. The unit ID must match `modbus_server_unit_id` (or it is `0`, meaning "accept any").
+The unit ID must match `modbus_server_unit_id` (or it is `0`, meaning "accept any"). Anything not covered below returns `IllegalFunction` or `IllegalDataAddress`.
+
+**Writes (function code `16`, WriteMultipleRegisters).** Both the OpMod
+register and any even-aligned 2/4/6/8/10-register sub-block within
+`40793..40802` are accepted, so clients that write individual setpoint
+fields (`GridWSpt` alone, etc.) work too — fields not present in the
+write keep their previous `active_config` values.
 
 | Address | Length | Type | Field | Notes |
 |---|---|---|---|---|
 | `40236` | 2 | U32BE | `CmpBMS.OpMod` | `2424` = Default, `2289` = Battery charging, `2290` = Battery discharging. Any other value is treated as `2424`. |
-| `40793` | 10 | 5 × U32BE | `CmpBMS.{BatChaMinW, BatChaMaxW, BatDchgMinW, BatDchgMaxW, GridWSpt}` | All in W. Min values are accepted but only used to recognise force-mode; the actual force power comes from the matching Max. |
+| `40793` | 2 | U32BE | `BatChaMinW`  | Accepted, ignored — controller has no minimum-charge cap. |
+| `40795` | 2 | U32BE | `BatChaMaxW`  | Charge cap. Used as the force-charge magnitude when OpMod is `2289`. |
+| `40797` | 2 | U32BE | `BatDchgMinW` | Accepted, ignored. |
+| `40799` | 2 | U32BE | `BatDchgMaxW` | Discharge cap. Force-discharge magnitude when OpMod is `2290`. |
+| `40801` | 2 | U32BE / I32BE | `GridWSpt`    | Mirrored into **both** grid targets when authority is `full`. |
+
+**Reads (function codes `3` and `4`, ReadHoldingRegisters / ReadInputRegisters).**
+Served from the proxy register cache (see [Proxy register cache](#proxy-register-cache) below). The proxy answers any address; addresses not in the table return the appropriate SMA NaN sentinel.
 
 ### Mode mapping
 
@@ -175,6 +188,30 @@ In other words: while PV output is within the inverter's permitted feed-in range
 ### Watchdog
 
 If the watchdog is enabled (`config.modbus_server_watchdog_s > 0`) and no Modbus write arrives within that many seconds, the live overrides (`grid_charge_target_w`, `grid_discharge_target_w`, `max_charge_w`, `max_discharge_w`) are reverted to the persistent `config` values and force-mode is cleared. SMA's own inverter watchdog runs at 5 minutes; the default of `60 s` here matches the resend interval that the WARP charger uses. Set to `0` to leave the most recent setpoint and force-mode in place indefinitely.
+
+### Proxy register cache
+
+The Modbus server also answers `ReadHoldingRegisters` (FC 3) and `ReadInputRegisters` (FC 4) for the register set evcc's `sma-hybrid` template queries — so evcc (or any other SMA-aware client) can talk to the SBSE controller as if it were the hybrid inverter itself. Four hot values are synthesized from the controller's live state on every read; the rest are populated by a round-robin background poll to the appropriate upstream unit (inverter at `3`, grid meter at `2`) at ~500 ms cadence, giving a full refresh every ~4.5 s.
+
+Uncovered addresses, or covered addresses that haven't been polled yet (e.g. immediately after a connection drop), answer with the per-type SMA NaN sentinel (`0xFFFFFFFF` for `uint32nan` / `uint64nan`, `0x80000000` for `int32nan`) — same convention real SMA hardware uses.
+
+| Address | Len | Type | SMA field | Source |
+|---|---|---|---|---|
+| `30513` | 4 | `uint64nan` | `Metering.TotWhOut`        | inverter poll |
+| `30581` | 4 | `uint64nan` | grid-meter cumulative Wh   | grid-meter poll |
+| `30773` | 2 | `uint32nan` | `DcMs.Watt[0]` (PV power)  | inverter poll |
+| `30775` | 2 | `int32nan`  | `GridMs.TotW`              | synthesized from `grid_w_raw` |
+| `30845` | 2 | `uint32nan` | `Bat.ChaStt` (SoC %)       | synthesized from `soc_pct` |
+| `30865` | 8 | `uint64nan` × 2 | grid-meter totals (in / out) | grid-meter poll |
+| `30961` | 2 | `uint32nan` | `DcMs.Amp[0]` (PV current) | inverter poll |
+| `30967` | 2 | `uint32nan` | `DcMs.Vol[0]` (PV voltage) | inverter poll |
+| `31259` | 10 | `uint32nan` × 5 | per-phase grid W      | grid-meter poll |
+| `31393` | 2 | `uint32nan` | `BatChrg.CurBatCha`        | synthesized: `max(0, −battery_w_raw)` |
+| `31395` | 2 | `uint32nan` | `BatDsch.CurBatDsch`       | synthesized: `max(0, +battery_w_raw)` |
+| `31401` | 4 | `uint64nan` | `CmpBMS.GetBatDschWh`      | inverter poll |
+| `31435` | 6 | `uint32nan` × 3 | per-phase grid A      | grid-meter poll |
+
+The synthesized rows match the corresponding SMA field semantics: positive `GridMs.TotW` means import, charge/discharge powers are unsigned magnitudes that key off the sign of the controller's `battery_w_raw`, and `Bat.ChaStt` returns `uint32nan` before the controller has its first SoC sample.
 
 ### Example: cURL force-charge at 1500 W
 
