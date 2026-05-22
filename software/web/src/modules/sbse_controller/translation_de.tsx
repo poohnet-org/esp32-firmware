@@ -24,6 +24,7 @@ let x = {
             "resume": "Fortsetzen",
             "mb_badge":  "MB",
             "mb_badge_help_title": "Ein externer Modbus-TCP-Client steuert den Regler aktuell",
+            "read_led_help_title": "Blinkt bei jedem über den SMA-Hybrid-Proxy beantworteten Modbus-Lesezugriff",
             "hard_badge": "HART",
             "hard_badge_help_title": "Harter Zielwert: Lade- und Entlade-Schwelle sind identisch; der Regler verfolgt diesen einen Netzwert in beide Richtungen.",
             "soft_badge": "WEICH",

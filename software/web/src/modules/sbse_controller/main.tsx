@@ -111,6 +111,20 @@ function SoftHardBadge({lo, hi}: {lo: number, hi: number}) {
     );
 }
 
+// Modbus read-activity LED. Renders a small dot in the status card header
+// that briefly pulses green every time the proxy serves a read (FC 3 / FC 4)
+// to evcc or any other client. The `key` prop forces React to remount the
+// element on every read, which restarts the CSS animation from frame zero
+// -- so rapid bursts of reads produce distinct flashes instead of one
+// continuous glow.
+function ReadActivityLED({pulse_key}: {pulse_key: number}) {
+    return (
+        <span class="sbse-read-led"
+              key={pulse_key}
+              title={__("sbse_controller.status.read_led_help_title")}/>
+    );
+}
+
 function StatTile(props: {icon: any, label: string, value: string, unit?: string, accent?: string}) {
     return (
         <div class={`sbse-tile ${props.accent ? "sbse-tile-" + props.accent : ""}`}>
@@ -407,6 +421,7 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <span class="fw-bold">{__("sbse_controller.status.title")}</span>
                         <div class="d-flex align-items-center gap-2">
+                            <ReadActivityLED pulse_key={st.modbus_read_count ?? 0}/>
                             <SoftHardBadge lo={ac.grid_charge_target_w}
                                            hi={ac.grid_discharge_target_w}/>
                             {st.modbus_active ?
