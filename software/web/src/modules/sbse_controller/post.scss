@@ -231,6 +231,41 @@
     }
 }
 
+// ---- Modbus read-activity LED ----
+//
+// A small dot in the status-card header that pulses green each time the
+// proxy serves a Modbus read. The animation runs to completion on every
+// (re)mount; the React component bumps its key on each read so a fresh
+// instance is created and the keyframe restarts from frame 0.
+//
+// Dark-mode support uses a CSS custom property for the rest-state colour
+// so a single global @keyframes works for both themes.
+.sbse-read-led {
+    --sbse-led-rest: rgba(0, 0, 0, 0.18);
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--sbse-led-rest);
+    animation: sbse-read-flash 400ms ease-out;
+    will-change: background, box-shadow;
+}
+
+@keyframes sbse-read-flash {
+    0% {
+        background: var(--bs-success);
+        box-shadow: 0 0 8px rgba(40, 167, 69, 0.85);
+    }
+    100% {
+        background: var(--sbse-led-rest);
+        box-shadow: none;
+    }
+}
+
+[data-bs-theme="dark"] .sbse-read-led {
+    --sbse-led-rest: rgba(255, 255, 255, 0.22);
+}
+
 // ---- Chart container ----
 .sbse-chart {
     position: relative;

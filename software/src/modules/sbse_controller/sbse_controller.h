@@ -221,6 +221,7 @@ private:
     int32_t  last_written_w     = 0;
     uint32_t write_ok_count     = 0;
     uint32_t write_err_count    = 0;
+    uint32_t modbus_read_count  = 0;   // FC 3 / FC 4 requests served by the proxy
     uint32_t consecutive_failures = 0;
     bool     safety_zero_armed  = false;
 
