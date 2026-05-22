@@ -53,6 +53,7 @@ export interface state {
     modbus_op_mod: number;
     modbus_force_w: number;
     modbus_read_count: number;
+    modbus_write_count: number;
     last_error: string;
 }
 

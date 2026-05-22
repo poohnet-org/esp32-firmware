@@ -25,6 +25,7 @@ let x = {
             "mb_badge":  "MB",
             "mb_badge_help_title": "An external Modbus TCP client is currently steering the controller",
             "read_led_help_title": "Flashes whenever the SMA-hybrid proxy serves a Modbus read",
+            "write_led_help_title": "Flashes whenever an external client writes (OpMod or setpoint) over Modbus",
             "hard_badge": "HARD",
             "hard_badge_help_title": "Hard target: charge and discharge targets are equal; the controller chases that single grid value in both directions.",
             "soft_badge": "SOFT",

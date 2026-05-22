@@ -173,8 +173,11 @@ void SbseController::pre_setup()
         // Bumped on every Modbus read (FC 3 / FC 4) served by the proxy
         // cache. The dashboard watches this for state changes to drive its
         // read-activity LED.
-        {"modbus_read_count", Config::Uint32(0)},
-        {"last_error",        Config::Str("", 0, 64)},
+        {"modbus_read_count",  Config::Uint32(0)},
+        // Bumped on every accepted Modbus write (FC 16 OpMod or setpoint
+        // sub-block). Drives the dashboard's write-activity LED.
+        {"modbus_write_count", Config::Uint32(0)},
+        {"last_error",         Config::Str("", 0, 64)},
     });
 }
 
@@ -470,6 +473,8 @@ TFModbusTCPExceptionCode SbseController::on_modbus_op_mod_write(uint32_t op_mod)
         modbus_op_mod = SMA_OPMOD_DEFAULT;
     }
     state.get("modbus_op_mod")->updateUint(modbus_op_mod);
+    ++modbus_write_count;
+    state.get("modbus_write_count")->updateUint(modbus_write_count);
     return TFModbusTCPExceptionCode::Success;
 }
 
@@ -483,6 +488,8 @@ TFModbusTCPExceptionCode SbseController::on_modbus_setpoint_write(
     // present in this write; absent fields keep their previous active_config
     // values (matches evcc's piecemeal write pattern).
     apply_modbus_setpoint_partial(start_address, reg_count, regs);
+    ++modbus_write_count;
+    state.get("modbus_write_count")->updateUint(modbus_write_count);
     return TFModbusTCPExceptionCode::Success;
 }
 
