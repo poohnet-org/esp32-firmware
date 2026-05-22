@@ -25,31 +25,52 @@
 #include <TFModbusTCPServer.h>
 #include "TFModbusTCPCommon.h"
 
-// SMA-compatible Modbus TCP server. Thin protocol adapter: accepts
-// WriteMultipleRegisters at exactly two addresses and forwards the parsed
-// payload to handlers provided by the controller. All semantics
-// (sticky OpMod, force-mode, watchdog, active_config wiring) live in the
-// controller; this class only owns the network listener and the dispatch.
+// SMA-compatible Modbus TCP server. Thin protocol adapter: accepts a small
+// set of SMA register block requests and forwards them to handlers provided
+// by the controller. All semantics (sticky OpMod, force-mode, watchdog,
+// active_config wiring, register cache) live in the controller; this class
+// only owns the network listener and the dispatch.
 //
-// Accepted addresses (function code 16, WriteMultipleRegisters):
-//   40236  2 reg   CmpBMS.OpMod                       -> on_op_mod(uint32_t)
-//   40793  10 reg  CmpBMS.{BatChaMin/Max,BatDchg.,GridWSpt}  -> on_setpoint(regs)
+// Accepted requests:
+//   FC 16 (WriteMultipleRegisters):
+//     40236, 2 reg        -> on_op_mod(uint32_t)
+//     40793..40802, any
+//       even sub-block    -> on_setpoint(start_addr, reg_count, regs)
+//   FC 3  (ReadHoldingRegisters):
+//     any                 -> on_read(fc, start_addr, reg_count, out)
+//   FC 4  (ReadInputRegisters):
+//     any                 -> on_read(fc, start_addr, reg_count, out)
+//
+// The setpoint handler accepts partial writes because evcc's sma-hybrid
+// template (and SMA's own clients) may write individual sub-fields rather
+// than the whole 5x uint32 block; we hand the relevant slice to the
+// controller and let it decide which fields to apply. The read handler
+// returns Success with the response buffer filled (or NaN sentinels for
+// addresses the proxy cache doesn't cover).
 //
 // Anything else returns IllegalFunction or IllegalDataAddress.
 class SbseModbusServer final
 {
 public:
     // Handlers return the Modbus exception code that should be sent on the
-    // wire. Returning Success acknowledges the write.
+    // wire. Returning Success acknowledges the request.
     using OpModHandler    = std::function<TFModbusTCPExceptionCode(uint32_t op_mod)>;
-    using SetpointHandler = std::function<TFModbusTCPExceptionCode(const uint16_t *regs10)>;
+    using SetpointHandler = std::function<TFModbusTCPExceptionCode(uint16_t start_address,
+                                                                   uint16_t reg_count,
+                                                                   const uint16_t *regs)>;
+    using ReadHandler     = std::function<TFModbusTCPExceptionCode(TFModbusTCPFunctionCode fc,
+                                                                   uint16_t start_address,
+                                                                   uint16_t reg_count,
+                                                                   uint16_t *out_regs)>;
 
     SbseModbusServer();
     SbseModbusServer(const SbseModbusServer &) = delete;
     SbseModbusServer &operator=(const SbseModbusServer &) = delete;
 
     // Wire up the dispatch callbacks. Must be called before start().
-    void set_handlers(OpModHandler on_op_mod, SetpointHandler on_setpoint);
+    void set_handlers(OpModHandler on_op_mod,
+                      SetpointHandler on_setpoint,
+                      ReadHandler on_read);
 
     // Snapshot the controller's persistent config into the server. unit_id 0
     // means "accept any unit id" (broadcast-style). Doesn't itself bind --
@@ -71,7 +92,7 @@ private:
                                       TFModbusTCPFunctionCode function_code,
                                       uint16_t start_address,
                                       uint16_t data_count,
-                                      const uint16_t *regs);
+                                      void *data);
 
     TFModbusTCPServer server{TFModbusTCPByteOrder::Host};
     bool     running         = false;
@@ -91,4 +112,5 @@ private:
 
     OpModHandler    on_op_mod;
     SetpointHandler on_setpoint;
+    ReadHandler     on_read;
 };

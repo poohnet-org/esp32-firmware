@@ -28,10 +28,14 @@
 #include "gcc_warnings.h"
 
 // SMA register block addresses + lengths we accept.
-static constexpr uint16_t SRV_OPMOD_ADDR      = 40236;
-static constexpr uint16_t SRV_OPMOD_REG_COUNT = 2;
-static constexpr uint16_t SRV_SETP_ADDR       = 40793;
-static constexpr uint16_t SRV_SETP_REG_COUNT  = 10;
+static constexpr uint16_t SRV_OPMOD_ADDR        = 40236;
+static constexpr uint16_t SRV_OPMOD_REG_COUNT   = 2;
+// Setpoint block: 5 x uint32 = 10 registers, starting at 40793. We accept
+// any 2/4/6/8/10-register sub-block within this range as long as it's
+// even-aligned to a uint32 boundary -- the controller's setpoint handler
+// picks only the fields that were actually written.
+static constexpr uint16_t SRV_SETP_ADDR_LO      = 40793;
+static constexpr uint16_t SRV_SETP_REG_COUNT_MAX = 10;
 
 // Server tick cadence. Lower = snappier I/O, higher = less scheduler churn.
 // 20 ms is plenty for a device that sees <1 write/s in normal use.
@@ -48,10 +52,13 @@ SbseModbusServer::SbseModbusServer() = default;
 #pragma GCC diagnostic pop
 #endif
 
-void SbseModbusServer::set_handlers(OpModHandler on_op_mod_, SetpointHandler on_setpoint_)
+void SbseModbusServer::set_handlers(OpModHandler on_op_mod_,
+                                    SetpointHandler on_setpoint_,
+                                    ReadHandler on_read_)
 {
-    on_op_mod    = std::move(on_op_mod_);
-    on_setpoint  = std::move(on_setpoint_);
+    on_op_mod   = std::move(on_op_mod_);
+    on_setpoint = std::move(on_setpoint_);
+    on_read     = std::move(on_read_);
 }
 
 void SbseModbusServer::configure(bool enabled_, uint16_t port_, uint8_t unit_id_)
@@ -90,8 +97,7 @@ void SbseModbusServer::start()
         },
         [this](uint8_t req_unit_id, TFModbusTCPFunctionCode fc,
                uint16_t start_address, uint16_t data_count, void *data) {
-            return this->dispatch(req_unit_id, fc, start_address, data_count,
-                                  static_cast<const uint16_t *>(data));
+            return this->dispatch(req_unit_id, fc, start_address, data_count, data);
         });
 
     if (!ok) {
@@ -138,24 +144,51 @@ TFModbusTCPExceptionCode SbseModbusServer::dispatch(
     TFModbusTCPFunctionCode function_code,
     uint16_t start_address,
     uint16_t data_count,
-    const uint16_t *regs)
+    void *data)
 {
     // Unit ID filter: 0 in our config means "accept any unit id".
     if (unit_id != 0 && req_unit_id != unit_id) {
         return TFModbusTCPExceptionCode::IllegalDataAddress;
     }
 
+    // Reads -- delegate to the controller's proxy cache for any address.
+    // The library has already validated the count against its protocol
+    // limits and zero-filled the response buffer.
+    if (function_code == TFModbusTCPFunctionCode::ReadHoldingRegisters
+        || function_code == TFModbusTCPFunctionCode::ReadInputRegisters) {
+        if (!on_read) {
+            return TFModbusTCPExceptionCode::IllegalFunction;
+        }
+        return on_read(function_code, start_address, data_count,
+                       static_cast<uint16_t *>(data));
+    }
+
     if (function_code != TFModbusTCPFunctionCode::WriteMultipleRegisters) {
         return TFModbusTCPExceptionCode::IllegalFunction;
     }
+
+    const uint16_t *regs = static_cast<const uint16_t *>(data);
 
     if (start_address == SRV_OPMOD_ADDR && data_count == SRV_OPMOD_REG_COUNT) {
         const uint32_t op_mod = (static_cast<uint32_t>(regs[0]) << 16) | regs[1];
         return on_op_mod ? on_op_mod(op_mod) : TFModbusTCPExceptionCode::Success;
     }
 
-    if (start_address == SRV_SETP_ADDR && data_count == SRV_SETP_REG_COUNT) {
-        return on_setpoint ? on_setpoint(regs) : TFModbusTCPExceptionCode::Success;
+    // Setpoint block. Accept any even-aligned 2/4/6/8/10-register sub-block
+    // that lies entirely within [40793, 40802]; the controller handler
+    // decodes which uint32 fields are present.
+    {
+        const uint16_t setp_offset = start_address - SRV_SETP_ADDR_LO;
+        const bool aligned    = (start_address >= SRV_SETP_ADDR_LO)
+                              && (setp_offset % 2 == 0);
+        const bool in_range   = aligned
+                              && (data_count > 0)
+                              && (data_count % 2 == 0)
+                              && (setp_offset + data_count <= SRV_SETP_REG_COUNT_MAX);
+        if (in_range) {
+            return on_setpoint ? on_setpoint(start_address, data_count, regs)
+                               : TFModbusTCPExceptionCode::Success;
+        }
     }
 
     return TFModbusTCPExceptionCode::IllegalDataAddress;

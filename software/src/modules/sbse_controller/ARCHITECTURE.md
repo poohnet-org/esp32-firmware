@@ -37,6 +37,7 @@ src/modules/sbse_controller/
   sbse_controller.cpp       module skeleton + SMA OpMod semantics
   sbse_control_loop.cpp     tick pipeline + register map
   sbse_modbus_server.{h,cpp}  SMA-compatible Modbus server (protocol)
+  sbse_modbus_proxy.{h,cpp}   SMA-hybrid read-side register cache
   sbse_trace_history.{h,cpp}  5-min 1 Hz ring buffer (HTTP endpoint)
 
 web/src/modules/sbse_controller/
@@ -63,6 +64,7 @@ The split below the C++ level is by **responsibility**, not size.
 | `current_running_mode()` (chooses `running` / `force_*` / `block_*` / `blocked`) | `sbse_control_loop.cpp` |
 | `connect_callback` / `disconnect_callback` (Modbus *client* connection events) | `sbse_control_loop.cpp` |
 | Listener socket, dispatch, unit-id filter for the *server* | `sbse_modbus_server.{h,cpp}` |
+| SMA-hybrid read-side register cache + round-robin upstream poll | `sbse_modbus_proxy.{h,cpp}` |
 | Trace ring buffer, 1 Hz throttle, `GET /sbse_controller/history` | `sbse_trace_history.{h,cpp}` |
 
 ## Class layout
@@ -74,14 +76,14 @@ The split below the C++ level is by **responsibility**, not size.
                    │   GenericTCPClientPool…)  │
                    └─────────────┬─────────────┘
                                  │ owns by value
-       ┌─────────────────────────┼─────────────────────────┐
-       │                         │                         │
-┌──────▼───────────┐  ┌──────────▼─────────┐  ┌────────────▼──────────┐
-│ SbseModbusServer │  │  SbseTraceHistory  │  │ TFModbusTCPSharedClient│
-│ (network adapter)│  │  (5-min ring +     │  │  (Modbus client to     │
-│                  │  │   /history GET)    │  │  SBSE inverter, owned  │
-└──────────────────┘  └────────────────────┘  │  by the shared pool)   │
-                                              └────────────────────────┘
+       ┌──────────────┬──────────┴──────────┬──────────────────────────┐
+       │              │                     │                          │
+┌──────▼───────────┐ ┌▼──────────────────┐ ┌▼─────────────────┐ ┌──────▼─────────────────┐
+│ SbseModbusServer │ │ SbseModbusProxy   │ │ SbseTraceHistory │ │ TFModbusTCPSharedClient│
+│ (network adapter)│ │ (read-side cache  │ │ (5-min ring +    │ │  (Modbus client to     │
+│                  │ │  + poll groups)   │ │  /history GET)   │ │  SBSE inverter, owned  │
+└──────────────────┘ └───────────────────┘ └──────────────────┘ │  by the shared pool)   │
+                                                                └────────────────────────┘
 ```
 
 `SbseController` is the only class with knowledge of the *semantics*
@@ -108,19 +110,25 @@ void register_url(const char *path);
 
 ```cpp
 using OpModHandler    = std::function<TFModbusTCPExceptionCode(uint32_t op_mod)>;
-using SetpointHandler = std::function<TFModbusTCPExceptionCode(const uint16_t *regs10)>;
+using SetpointHandler = std::function<TFModbusTCPExceptionCode(uint16_t start_address,
+                                                               uint16_t reg_count,
+                                                               const uint16_t *regs)>;
+using ReadHandler     = std::function<TFModbusTCPExceptionCode(TFModbusTCPFunctionCode fc,
+                                                               uint16_t start_address,
+                                                               uint16_t reg_count,
+                                                               uint16_t *out_regs)>;
 
-void set_handlers(OpModHandler, SetpointHandler);
+void set_handlers(OpModHandler, SetpointHandler, ReadHandler);
 void configure(bool enabled, uint16_t port, uint8_t unit_id);
 bool needs_restart_for(bool new_enabled, uint16_t new_port) const;
 void start();   void stop();   void restart();
 ```
 
-- Pure protocol adapter. Accepts WriteMultipleRegisters at exactly two
-  addresses (`40236` length 2, `40793` length 10), forwards the parsed
-  payload through the two handlers, returns the handler's exception
-  code on the wire. Anything else → `IllegalFunction` /
-  `IllegalDataAddress`.
+- Pure protocol adapter. Accepts WriteMultipleRegisters at `40236`
+  (length 2) and any even-aligned 2/4/6/8/10-register sub-block within
+  `40793..40802`; plus ReadHoldingRegisters / ReadInputRegisters at any
+  address (delegated wholesale to `on_read`). Anything else →
+  `IllegalFunction` / `IllegalDataAddress`.
 - Knows nothing about `active_config`, force-mode, the watchdog, or
   the SMA OpMod *values* (it just hands the raw uint32 to the handler).
 - Owns the underlying `TFModbusTCPServer`, its 20 ms tick task, and
@@ -130,9 +138,48 @@ The controller wires the handlers in `register_events()`:
 
 ```cpp
 modbus_server.set_handlers(
-    [this](uint32_t op_mod)        { return this->on_modbus_op_mod_write(op_mod); },
-    [this](const uint16_t *regs10) { return this->on_modbus_setpoint_write(regs10); });
+    [this](uint32_t op_mod) { return this->on_modbus_op_mod_write(op_mod); },
+    [this](uint16_t addr, uint16_t count, const uint16_t *regs) {
+        return this->on_modbus_setpoint_write(addr, count, regs);
+    },
+    [this](TFModbusTCPFunctionCode fc, uint16_t addr, uint16_t count, uint16_t *out) {
+        return this->on_modbus_read(fc, addr, count, out);
+    });
 ```
+
+### `SbseModbusProxy`
+
+```cpp
+struct SynthesisInputs {
+    int32_t grid_w_raw;       // matches SMA GridMs.TotW sign (positive = import)
+    int32_t battery_w_raw;    // positive = discharging, negative = charging
+    uint8_t soc_pct;          // 255 = unknown -> NaN
+};
+
+void invalidate_all();
+bool next_poll(size_t *idx, uint8_t *unit, uint16_t *addr,
+               uint16_t *count, uint16_t **cache_dst);
+void mark_group_done(size_t idx, bool success);
+
+TFModbusTCPExceptionCode pack_response(TFModbusTCPFunctionCode fc,
+                                       uint16_t start_addr,
+                                       uint16_t count,
+                                       uint16_t *response_buf,
+                                       const SynthesisInputs &inputs) const;
+```
+
+- Holds the read-side register set evcc's `sma-hybrid` template
+  queries: cumulative energy totals, per-phase grid W/A, PV DC. Some
+  registers are synthesized from controller state at read time
+  (`GridMs.TotW`, `Bat.ChaStt`, `BatChrg.CurBatCha`, `BatDsch.CurBatDsch`),
+  the rest are populated by a round-robin polling cycle the controller
+  drives every 500 ms via the existing modbus client connection.
+- `pack_response()` is the server's `on_read` handler; uncovered
+  addresses get the per-type SMA NaN sentinel (`0xFFFFFFFF` for
+  uint32/uint64, `0x80000000` for int32) so the client decodes them
+  as "no data" rather than a misleading 0.
+- See the group table at the top of `sbse_modbus_proxy.cpp` for the
+  full address → cache layout / upstream-unit mapping.
 
 ## Lifecycle (Tinkerforge `IModule`)
 

@@ -155,6 +155,9 @@ void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*re
     battery_idle_since_us = -1_us;
     keepalive_pending_zero = false;
     state.get("read_fail_streak")->updateUint(0);
+    // Drop the proxy cache freshness markers -- evcc reads will return NaN
+    // sentinels until the next successful proxy poll repopulates them.
+    modbus_proxy.invalidate_all();
     publish_mode(Mode::NotConnected);
 }
 
@@ -754,4 +757,37 @@ SbseController::Mode SbseController::current_running_mode() const
         return Mode::BlockDischarge;
     }
     return Mode::Running;
+}
+
+// ---------------------------------------------------------------------------
+// Proxy register cache poller. Scheduled on its own task (sbse_controller.cpp)
+// at ~500 ms cadence; each tick asks SbseModbusProxy for the next group that
+// needs refreshing and fires a single ReadInputRegisters via the shared
+// modbus pool. Reads land directly in the proxy's cache buffer.
+// ---------------------------------------------------------------------------
+
+void SbseController::run_proxy_poll()
+{
+    if (connected_client == nullptr) {
+        return;
+    }
+    size_t   idx;
+    uint8_t  upstream_unit;
+    uint16_t addr;
+    uint16_t reg_count;
+    uint16_t *cache_dst;
+    if (!modbus_proxy.next_poll(&idx, &upstream_unit, &addr, &reg_count, &cache_dst)) {
+        return;
+    }
+
+    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    client->transact(upstream_unit,
+                     TFModbusTCPFunctionCode::ReadInputRegisters,
+                     addr,
+                     reg_count,
+                     cache_dst,
+                     MODBUS_TIMEOUT,
+    [this, idx](TFModbusTCPClientTransactionResult result, const char * /*err*/) {
+        modbus_proxy.mark_group_done(idx, result == TFModbusTCPClientTransactionResult::Success);
+    });
 }
