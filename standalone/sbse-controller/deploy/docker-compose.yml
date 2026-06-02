@@ -1,0 +1,28 @@
+services:
+  sbse-controller:
+    build: ..
+    image: sbse-controller:latest
+    container_name: sbse-controller
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # dashboard + REST API
+      - "502:502"     # SMA-compatible Modbus server (for evcc / WARP)
+    environment:
+      SBSE_ENABLED: "true"
+      SBSE_HOST: "192.168.110.151"   # <-- your SBSE inverter IP
+      SBSE_PORT: "502"
+      SBSE_GRID_CHARGE_TARGET_W: "-720"
+      SBSE_GRID_DISCHARGE_TARGET_W: "-500"
+      SBSE_MODBUS_SERVER_ENABLED: "true"
+      SBSE_MODBUS_SERVER_PORT: "502"
+      SBSE_MODBUS_SERVER_UNIT_ID: "3"
+      # Optional MQTT mirror:
+      # SBSE_MQTT_ENABLED: "true"
+      # SBSE_MQTT_BROKER: "tcp://mosquitto:1883"
+      # SBSE_MQTT_PREFIX: "sbse/"
+      SBSE_CONFIG_PATH: "/data/config.json"
+    volumes:
+      - sbse-data:/data
+
+volumes:
+  sbse-data:
