@@ -1,0 +1,10 @@
+# Go
+/sbse-controller
+/sbse-controller.exe
+*.test
+
+# Node
+/web/node_modules/
+
+# The built dashboard (web/dist) IS committed so `go build` works from a fresh
+# checkout without running npm. Regenerate it with `cd web && npm run build`.
