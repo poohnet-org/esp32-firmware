@@ -192,12 +192,14 @@
 //   t=160s  CP -> IEC 61851 PWM, non-ISO EV can charge
 //
 // This is crazy long... The optional (non-standard) fast_timeout config
-// shortens this to a single 10s attempt without E/F cycling:
+// shortens this to two 10s attempts with one E/F wake-up cycle in between:
 //   t=0s    EV plugs in, timeout starts (10s)
-//   t=10s   Timeout: no retries -> IEC fallback
-//   t=12s   CP -> IEC 61851 PWM, non-ISO EV can charge
+//   t=10s   Timeout #1: CP -> E/F for 4s (wake-up trigger), then back to 5%
+//   t=24s   Timeout #2: retry exhausted -> IEC fallback
+//   t=26s   CP -> IEC 61851 PWM, non-ISO EV can charge
 // A spec-conforming EV has to send CM_SLAC_PARM.REQ within TP_EV_SLAC_init
-// (10s), so ISO-capable EVs should still match with fast_timeout enabled.
+// (10s) of plug-in or wake-up, and the E/F cycle restarts that window, so
+// ISO-capable EVs should still match with fast_timeout enabled.
 // ============================================================================
 
 #include "iso15118.h"

@@ -870,9 +870,11 @@ void SLAC::state_machine_loop()
             // TT_EVSE_SLAC_init expired: no CM_SLAC_PARM.REQ received from EV.
             // Per [V2G3-M06-07]: cycle through State E/F for T_step_EF, then
             // retry up to C_SEQU_RETRY times before falling back to IEC.
-            // With fast_timeout enabled we skip the E/F retry cycle entirely
-            // and fall back to IEC after the first (shortened) timeout.
-            const uint8_t max_retries = iso15118.is_fast_timeout() ? 0 : SLAC_C_SEQU_RETRY;
+            // With fast_timeout enabled we use two shortened attempts with a
+            // single E/F cycle in between: The E/F transition is a defined
+            // wake-up trigger and restarts the EV's TP_EV_SLAC_init window,
+            // giving EVs that were asleep at plug-in a second clean chance.
+            const uint8_t max_retries = iso15118.is_fast_timeout() ? 1 : SLAC_C_SEQU_RETRY;
             slac_init_retry_count++;
             if (slac_init_retry_count > max_retries) {
                 iso15118.trace("SLAC: TT_EVSE_SLAC_init retries exhausted (%u/%u), falling back to IEC",
