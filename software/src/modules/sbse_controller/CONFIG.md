@@ -430,7 +430,8 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
   ── Grid-import floor. Charging needs the inverter's WSptMin (41433) held
   ── negative, else the inverter may not draw from the grid and the battery
   ── won't charge from it (firmware ≥ 3.16 defaults 41433 to 0). It is volatile
-  ── (~10 s watchdog), so refresh it every 5 s while charging, independent of the
+  ── (~10 s watchdog that only resets on a CHANGED value, so the floor is
+  ── alternated by 1 W each refresh), refreshed every 5 s while charging, independent of the
   ── deadband. Clamped to −min(max_charge_w, inverter_rated_w) so it is never
   ── rejected. Not written while discharging/idle (reverts to 0 harmlessly).
   floor_due = (target_w < 0) and (5 s elapsed / value changed / first charge)
