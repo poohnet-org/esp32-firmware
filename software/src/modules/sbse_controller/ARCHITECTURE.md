@@ -59,7 +59,7 @@ The split below the C++ level is by **responsibility**, not size.
 | `pause` / `resume` command handlers | `sbse_controller.cpp` |
 | SMA `OpMod` constants and sticky state, force-mode interpretation, `apply_modbus_setpoint_block`, watchdog | `sbse_controller.cpp` |
 | Per-tick read → compute → write pipeline (`tick`, `read_*`, `compute_and_write`, `send_*`) | `sbse_control_loop.cpp` |
-| SBSE register-map constants (`GRID_POWER_ADDR`, `BATTERY_POWER_ADDR`, `SBSE_COMPANION_VALUE`, …) | `sbse_control_loop.cpp` |
+| SBSE register-map constants (`GRID_POWER_ADDR`, `BATTERY_POWER_ADDR`, `POWER_SETPOINT_ADDR`, `INV_WSPTMIN_ADDR`, …) | `sbse_control_loop.cpp` |
 | `mode_name(Mode)` translation table | `sbse_control_loop.cpp` |
 | `current_running_mode()` (chooses `running` / `force_*` / `block_*` / `blocked`) | `sbse_control_loop.cpp` |
 | `connect_callback` / `disconnect_callback` (Modbus *client* connection events) | `sbse_control_loop.cpp` |
@@ -252,9 +252,20 @@ compute_and_write()
  │  #                  the deadband and re-assert target_w as-is.
  │  # (Both gated behind force-mode / pause / safety branches above.)
  │
- │  if !keepalive_pulse and !keepalive_refresh
- │     and |target − last_written_w| < deadband_w               → skip write
- │  else  → send_setpoint(target)              → write 41467 (4 reg)
+ │  setpoint_write = keepalive_pulse or keepalive_refresh
+ │                   or |target − last_written_w| ≥ deadband_w
+ │
+ │  # Grid-import floor: while charging (target < 0) hold inverter WSptMin
+ │  # (41433) at −min(max_charge_w, inverter_rated_w). Firmware ≥ 3.16 defaults
+ │  # it to 0, which blocks net grid import; it is volatile (~10 s watchdog) so
+ │  # it is refreshed every IMPORT_FLOOR_REFRESH (5 s), INDEPENDENT of the
+ │  # setpoint deadband. Not written while discharging/idle (reverts to 0).
+ │  floor_due = (target < 0) and (timer elapsed / value changed / first time)
+ │
+ │  if setpoint_write and floor_due → send_import_floor(...) → send_setpoint(target)
+ │  elif setpoint_write             → send_setpoint(target)     → write 41467/41469 (4 reg, pinned)
+ │  elif floor_due                  → send_import_floor(...)     → write 41433 (2 reg)
+ │  else                            → skip write
  ▼
 finish_cycle(mode)   ── publishes the mode pill on the dashboard
 ```

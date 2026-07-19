@@ -354,6 +354,7 @@ void SbseController::register_urls()
         // and drop any in-flight two-tick keep-alive event.
         battery_idle_since_us  = -1_us;
         keepalive_pending_zero = false;
+        import_floor_last_us   = -1_us;
         // Operator takeover. (Idempotent if already cleared by pause.)
         modbus_force_w = 0;
         modbus_op_mod  = SMA_OPMOD_DEFAULT;
