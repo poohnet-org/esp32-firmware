@@ -81,20 +81,24 @@ public:
     static constexpr size_t BUF_BATTERY_LEN  = 8;
     static constexpr size_t BUF_SOC_LEN      = 2;
     static constexpr size_t BUF_SETPOINT_LEN = 4;
+    static constexpr size_t BUF_IMPORT_FLOOR_LEN = 2;   // inverter WSptMin (41433), S32
 
 private:
     // GenericTCPClientPoolConnector
-    void connect_callback(TFGenericTCPClientConnectResult result) override;
-    void disconnect_callback(TFGenericTCPClientDisconnectReason reason) override;
+    void connect_callback(TFGenericTCPClientConnectResult result, TFGenericTCPClientPoolShareLevel share_level) override;
+    void disconnect_callback(TFGenericTCPClientDisconnectReason reason, TFGenericTCPClientPoolShareLevel share_level) override;
 
     // Cycle
     void tick();
     bool begin_cycle();                                // pre-condition checks; sets cycle_in_flight on success
     void read_grid_power();
     void read_battery_power();
+    void after_battery_data();                         // SoC-if-due-or-compute continuation
+    void read_rated_power();                            // one-shot rated-power read (import-floor clamp)
     void read_soc();
     void compute_and_write();
     void send_setpoint(int32_t watts);
+    void send_import_floor(int32_t floor_w, bool then_setpoint, int32_t watts);  // refresh 41433, chain if due
     void send_zero_w();        // fire-and-forget 0 W write, used by pause + pre_reboot
     void send_safety_zero();
     int32_t pick_keepalive_pulse();  // alternating-sign small pulse, respecting SoC + caps
@@ -237,6 +241,16 @@ private:
     bool     keepalive_next_charge  = false;
     bool     keepalive_pending_zero = false;  // next cycle: force a 0 W return write
 
+    // Grid-import floor (inverter WSptMin, 41433) bookkeeping. It defaults to 0 on
+    // firmware >= 3.16 (blocks grid-charging) and is volatile (~10 s watchdog), so
+    // it is refreshed to -min(max_charge_w, inverter_rated_w) every
+    // IMPORT_FLOOR_REFRESH while charging, independent of the setpoint deadband.
+    // inverter_rated_w is read once (0 = not yet read) to bound the floor so the
+    // write is never rejected as out-of-range.
+    int32_t  inverter_rated_w    = 0;
+    micros_t import_floor_last_us = -1_us;
+    int32_t  import_floor_last_w  = 0;
+
     // --- Modbus staging buffers (per-cycle, owned by the module) ---
     // Sized via the BUF_*_LEN constants above; the static_asserts in
     // sbse_control_loop.cpp tie them back to the register-block lengths.
@@ -249,6 +263,7 @@ private:
     uint16_t buf_soc     [BUF_SOC_LEN];
     uint16_t buf_setpoint[BUF_SETPOINT_LEN];
     uint16_t buf_zero    [BUF_SETPOINT_LEN];
+    uint16_t buf_import_floor[BUF_IMPORT_FLOOR_LEN];   // inverter WSptMin (41433) refresh
 
     // --- 5-min live trace, served via GET /sbse_controller/history ---
     SbseTraceHistory trace_history;

@@ -424,10 +424,21 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
   ──   gap at keepalive_interval_s whether the battery is active or idle.
   if keepalive_pulse due:  target_w = ±keepalive_pulse_w
 
-  if !keepalive_pulse and !keepalive_refresh
-                       and |target_w − last_written_w| < deadband_w
-                                              → skip write (inverter holds last setpoint)
-  else                                          → write target_w to POWER_SETPOINT_ADDR (unit 3)
+  setpoint_write = keepalive_pulse or keepalive_refresh
+                   or |target_w − last_written_w| ≥ deadband_w
+
+  ── Grid-import floor. Charging needs the inverter's WSptMin (41433) held
+  ── negative, else the inverter may not draw from the grid and the battery
+  ── won't charge from it (firmware ≥ 3.16 defaults 41433 to 0). It is volatile
+  ── (~10 s watchdog), so refresh it every 5 s while charging, independent of the
+  ── deadband. Clamped to −min(max_charge_w, inverter_rated_w) so it is never
+  ── rejected. Not written while discharging/idle (reverts to 0 harmlessly).
+  floor_due = (target_w < 0) and (5 s elapsed / value changed / first charge)
+
+  if setpoint_write and floor_due → write 41433 (unit 3) then POWER_SETPOINT (41467/41469, pinned)
+  elif setpoint_write             → write POWER_SETPOINT (41467/41469 both = target_w, unit 3)
+  elif floor_due                  → write 41433 (unit 3)
+  else                            → skip write (inverter holds last setpoint)
 
   if read_fail_streak == safety_zero_after_failures → write 0 W, mode = safety
   if modbus_active and last Modbus write > watchdog_s ago → revert overrides

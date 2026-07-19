@@ -61,17 +61,35 @@ static constexpr size_t   BATTERY_DISCHARGE_REG_OFFSET = 6;  // register index o
 static constexpr uint16_t BATTERY_SOC_ADDR           = 30845;  // uint32be [%]
 static constexpr uint16_t BATTERY_SOC_REG_COUNT      = 2;
 
-// Active-power setpoint block. Writes two consecutive int32be values:
-//   [0] battery active-power setpoint [W]
-//   [1] companion value, see SBSE_COMPANION_VALUE comment.
+// Battery active-power setpoint window. Writes two consecutive int32be values:
+//   [0] Bat.WCtlCom.WSptMax (41467) -- max battery power (+discharge / -charge)
+//   [1] Bat.WCtlCom.WSptMin (41469) -- min battery power
+// Both halves are pinned to the same value so the inverter is FORCED to the
+// commanded battery power. On firmware >= 3.16 the pair is a self-regulated
+// window, not drive-to-bound: leaving WSptMin wide (the old fixed -15000) lets
+// the inverter self-regulate and ignore the command. Pinning both restores the
+// "battery = commanded power" behaviour verified on the device.
 static constexpr uint16_t POWER_SETPOINT_ADDR        = 41467;
 static constexpr uint16_t POWER_SETPOINT_REG_COUNT   = 4;
 
-// Second int32 written alongside the setpoint. Empirically -15000 in the
-// production Node-RED flow (working setup). FIXME: cross-reference with the
-// SMA SBSE Modbus profile to give this a proper name. Most likely a reactive-
-// power / mode-flag value tied to register 41469.
-static constexpr int32_t  SBSE_COMPANION_VALUE       = -15000;
+// Inverter (AC-side) active-power floor: Inverter.WModCfg.WCtlComCfg.WSptMin
+// (41433, S32 W). On firmware >= 3.16 this DEFAULTS TO 0, which forbids negative
+// inverter power = forbids net grid import = blocks charging the battery from the
+// grid (discharge is unaffected). We hold it negative while charging to permit
+// import. It is VOLATILE -- the device reverts it to 0 after a ~10 s watchdog --
+// so it must be refreshed periodically (see IMPORT_FLOOR_REFRESH), independent of
+// the setpoint deadband. 41431 (WSptMax) is left to the inverter (it maintains it
+// at rating and rejects out-of-range writes).
+static constexpr uint16_t INV_WSPTMIN_ADDR           = 41433;
+static constexpr uint16_t INV_WSPTMIN_REG_COUNT      = 2;
+static constexpr micros_t IMPORT_FLOOR_REFRESH       = 5_s;    // < ~10 s device watchdog
+
+// Rated active power (Nameplate WMaxOutRtg, 30231, U32 W), read once and used to
+// clamp the import floor so we never send an out-of-range value that the inverter
+// would reject (which would silently re-block charging).
+static constexpr uint16_t INV_RATED_POWER_ADDR       = 30231;
+static constexpr uint16_t INV_RATED_POWER_REG_COUNT  = 2;
+static constexpr int32_t  INV_RATED_POWER_FALLBACK_W = 5000;   // if the read fails/implausible
 
 // Modbus transaction timeout. The Node-RED flow uses 2 s with this device.
 static constexpr micros_t MODBUS_TIMEOUT             = 2_s;
@@ -83,6 +101,7 @@ static_assert(SbseController::BUF_GRID_LEN     == GRID_POWER_REG_COUNT,     "buf
 static_assert(SbseController::BUF_BATTERY_LEN  == BATTERY_POWER_REG_COUNT,  "buf_battery size");
 static_assert(SbseController::BUF_SOC_LEN      == BATTERY_SOC_REG_COUNT,    "buf_soc size");
 static_assert(SbseController::BUF_SETPOINT_LEN == POWER_SETPOINT_REG_COUNT, "buf_setpoint size");
+static_assert(SbseController::BUF_IMPORT_FLOOR_LEN == INV_WSPTMIN_REG_COUNT, "buf_import_floor size");
 
 // ---------------------------------------------------------------------------
 
@@ -129,7 +148,7 @@ static const char *mode_name(SbseController::Mode m)
 // Modbus client connection lifecycle
 // ---------------------------------------------------------------------------
 
-void SbseController::connect_callback(TFGenericTCPClientConnectResult result)
+void SbseController::connect_callback(TFGenericTCPClientConnectResult result, TFGenericTCPClientPoolShareLevel /*share_level*/)
 {
     if (result == TFGenericTCPClientConnectResult::Connected) {
         // Stay in Stale until the first successful read sequence promotes us
@@ -140,7 +159,7 @@ void SbseController::connect_callback(TFGenericTCPClientConnectResult result)
     }
 }
 
-void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*reason*/)
+void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*reason*/, TFGenericTCPClientPoolShareLevel /*share_level*/)
 {
     cycle_in_flight       = false;
     ema_grid_seeded       = false;
@@ -154,6 +173,8 @@ void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*re
     // and drop any in-flight two-tick keep-alive event.
     battery_idle_since_us = -1_us;
     keepalive_pending_zero = false;
+    // Drop the import-floor timer so the next charge re-opens 41433 immediately.
+    import_floor_last_us = -1_us;
     state.get("read_fail_streak")->updateUint(0);
     // Drop the proxy cache freshness markers -- evcc reads will return NaN
     // sentinels until the next successful proxy poll repopulates them.
@@ -192,6 +213,7 @@ bool SbseController::begin_cycle()
             // return-write -- pause already wrote 0.
             battery_idle_since_us  = -1_us;
             keepalive_pending_zero = false;
+            import_floor_last_us   = -1_us;
         } else {
             publish_mode(Mode::Paused);
             return false;
@@ -267,12 +289,55 @@ void SbseController::read_battery_power()
         // is robust either way.)
         battery_w_raw = static_cast<int32_t>(discharge_w) - static_cast<int32_t>(charge_w);
 
-        if (last_soc_read_ok == -1_us
-            || deadline_elapsed(last_soc_read_ok + static_cast<micros_t>(soc_interval_ms))) {
-            read_soc();
-        } else {
-            compute_and_write();
+        // Learn the inverter's rated power once (needed to clamp the import
+        // floor). Chains into the normal SoC-or-compute continuation after.
+        if (inverter_rated_w == 0) {
+            read_rated_power();
+            return;
         }
+        after_battery_data();
+    });
+}
+
+void SbseController::after_battery_data()
+{
+    if (last_soc_read_ok == -1_us
+        || deadline_elapsed(last_soc_read_ok + static_cast<micros_t>(soc_interval_ms))) {
+        read_soc();
+    } else {
+        compute_and_write();
+    }
+}
+
+void SbseController::read_rated_power()
+{
+    // One-shot: read Nameplate WMaxOutRtg (rated active power) to size the import
+    // floor clamp. Reuses buf_battery (its data has already been consumed above).
+    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+
+    client->transact(INVERTER_UNIT_ID,
+                     TFModbusTCPFunctionCode::ReadInputRegisters,
+                     INV_RATED_POWER_ADDR,
+                     INV_RATED_POWER_REG_COUNT,
+                     buf_battery,
+                     MODBUS_TIMEOUT,
+    [this](TFModbusTCPClientTransactionResult result, const char *err) {
+        if (result == TFModbusTCPClientTransactionResult::Success) {
+            const uint32_t r = read_uint32be(buf_battery);
+            if (r > 0 && r <= 100000u) {
+                inverter_rated_w = static_cast<int32_t>(r);
+            }
+        }
+        if (inverter_rated_w == 0) {
+            // Read failed or implausible -- fall back so we don't retry forever.
+            inverter_rated_w = INV_RATED_POWER_FALLBACK_W;
+            logger.printfln("rated-power read failed (%s%s%s); import-floor clamp falls back to %d W",
+                            get_tf_modbus_tcp_client_transaction_result_name(result),
+                            err != nullptr ? " / " : "",
+                            err != nullptr ? err   : "",
+                            static_cast<int>(inverter_rated_w));
+        }
+        after_battery_data();
     });
 }
 
@@ -524,14 +589,38 @@ void SbseController::compute_and_write()
         && deadline_elapsed(last_write_ok
                             + micros_t{static_cast<int64_t>(keepalive_interval_s) * 1000000LL});
     const bool bypass_deadband = keepalive_fired || keepalive_return || keepalive_refresh_due;
-    if (!bypass_deadband
-        && last_write_ok != -1_us
-        && std::abs(target_w - last_written_w) < deadband_w) {
-        finish_cycle(current_running_mode());
-        return;
-    }
+    const bool setpoint_write =
+        bypass_deadband
+        || last_write_ok == -1_us
+        || std::abs(target_w - last_written_w) >= deadband_w;
 
-    send_setpoint(target_w);
+    // 9) Grid-import floor. When charging (target < 0) the inverter's WSptMin
+    //    (41433) must be held negative or the battery cannot pull from the grid
+    //    (firmware >= 3.16 defaults it to 0). It is volatile (~10 s watchdog), so
+    //    refresh it every IMPORT_FLOOR_REFRESH regardless of the setpoint
+    //    deadband -- a steady charge stops changing target_w, and a deadband-
+    //    gated refresh would let the floor revert mid-charge and stall the charge.
+    //    Clamp to the rated power so the write is never rejected. Not written
+    //    while discharging/idle; it reverts to 0 on its own (harmless).
+    const bool charging   = target_w < 0;
+    const int32_t floor_w = charging ? -std::min(max_charge_w, inverter_rated_w) : 0;
+    const bool floor_due  = charging
+        && (import_floor_last_us == -1_us
+            || floor_w != import_floor_last_w
+            || deadline_elapsed(import_floor_last_us + IMPORT_FLOOR_REFRESH));
+
+    // Dispatch: open/refresh the floor and/or write the battery setpoint. The
+    // shared Modbus client serialises transactions, so when both are due the
+    // floor is written first and chains into the setpoint write.
+    if (setpoint_write && floor_due) {
+        send_import_floor(floor_w, /*then_setpoint=*/true, target_w);
+    } else if (setpoint_write) {
+        send_setpoint(target_w);
+    } else if (floor_due) {
+        send_import_floor(floor_w, /*then_setpoint=*/false, 0);
+    } else {
+        finish_cycle(current_running_mode());
+    }
 }
 
 int32_t SbseController::pick_keepalive_pulse()
@@ -566,8 +655,8 @@ int32_t SbseController::pick_keepalive_pulse()
 
 void SbseController::send_setpoint(int32_t watts)
 {
-    write_int32be(buf_setpoint + 0, watts);
-    write_int32be(buf_setpoint + 2, SBSE_COMPANION_VALUE);
+    write_int32be(buf_setpoint + 0, watts);   // WSptMax (41467)
+    write_int32be(buf_setpoint + 2, watts);   // WSptMin (41469) -- pinned equal to force the exact power
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
 
@@ -607,6 +696,48 @@ void SbseController::send_setpoint(int32_t watts)
     });
 }
 
+void SbseController::send_import_floor(int32_t floor_w, bool then_setpoint, int32_t watts)
+{
+    // Refresh the inverter's grid-import floor (41433). On success, either chain
+    // into the battery-setpoint write (when it was also due this cycle) or close
+    // the cycle. The battery-setpoint watchdog markers (last_write_ok /
+    // last_written_w) are NOT touched here -- only the floor's own timer.
+    write_int32be(buf_import_floor + 0, floor_w);
+
+    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+
+    client->transact(INVERTER_UNIT_ID,
+                     TFModbusTCPFunctionCode::WriteMultipleRegisters,
+                     INV_WSPTMIN_ADDR,
+                     INV_WSPTMIN_REG_COUNT,
+                     buf_import_floor,
+                     MODBUS_TIMEOUT,
+    [this, floor_w, then_setpoint, watts](TFModbusTCPClientTransactionResult result, const char *err) {
+        if (result == TFModbusTCPClientTransactionResult::Success) {
+            import_floor_last_w  = floor_w;
+            import_floor_last_us = now_us();
+        } else {
+            // Non-fatal: the battery command below still goes out; charging just
+            // stays blocked until the floor takes. Log so a persistent reject
+            // (e.g. floor beyond rating) is visible.
+            ++write_err_count;
+            state.get("write_err_count")->updateUint(write_err_count);
+            logger.printfln("import-floor (41433=%d) write failed: %s (%d)%s%s",
+                            static_cast<int>(floor_w),
+                            get_tf_modbus_tcp_client_transaction_result_name(result),
+                            static_cast<int>(result),
+                            err != nullptr ? " / " : "",
+                            err != nullptr ? err   : "");
+        }
+
+        if (then_setpoint) {
+            send_setpoint(watts);          // finishes the cycle in its own callback
+        } else {
+            finish_cycle(current_running_mode());
+        }
+    });
+}
+
 void SbseController::send_zero_w()
 {
     // Zero-setpoint write. The SBSE has no auto-fallback to internal control,
@@ -622,7 +753,7 @@ void SbseController::send_zero_w()
     }
 
     write_int32be(buf_zero + 0, 0);
-    write_int32be(buf_zero + 2, SBSE_COMPANION_VALUE);
+    write_int32be(buf_zero + 2, 0);   // pin WSptMin = WSptMax = 0 to truly park the battery
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
 
@@ -682,7 +813,7 @@ void SbseController::send_safety_zero()
     // inside a cycle's failure callback, the regular send_setpoint flow won't
     // overlap, but isolating the buffer keeps the invariant uniform.
     write_int32be(buf_zero + 0, 0);
-    write_int32be(buf_zero + 2, SBSE_COMPANION_VALUE);
+    write_int32be(buf_zero + 2, 0);   // pin WSptMin = WSptMax = 0 to truly park the battery
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
 
