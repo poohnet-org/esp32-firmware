@@ -250,6 +250,7 @@ private:
     int32_t  inverter_rated_w    = 0;
     micros_t import_floor_last_us = -1_us;
     int32_t  import_floor_last_w  = 0;
+    bool     import_floor_wiggle  = false;   // alternates the floor by 1 W so each refresh is a value change
 
     // --- Modbus staging buffers (per-cycle, owned by the module) ---
     // Sized via the BUF_*_LEN constants above; the static_asserts in
