@@ -647,10 +647,12 @@ class TraceChart extends Component<{samples: Sample[], series: SeriesSpec[], col
 // (small values around the target range), and setpoint vs. actual battery
 // power (large, often opposite-signed values). Mixing all five series in one
 // plot squashed the y-scale into unreadability.
+// uPlot draws series in array order, so the grid line goes last to render on
+// top of the target steps (same reason battery follows setpoint below).
 const GRID_SERIES: SeriesSpec[] = [
-    { key: "grid",      name: () => __("sbse_controller.chart.grid"),      path: UplotPath.Line, extract: (s) => s.grid },
     { key: "target_lo", name: () => __("sbse_controller.chart.target_lo"), path: UplotPath.Step, extract: (s) => s.target_lo },
     { key: "target_hi", name: () => __("sbse_controller.chart.target_hi"), path: UplotPath.Step, extract: (s) => s.target_hi },
+    { key: "grid",      name: () => __("sbse_controller.chart.grid"),      path: UplotPath.Line, extract: (s) => s.grid },
 ];
 
 const BATTERY_SERIES: SeriesSpec[] = [
