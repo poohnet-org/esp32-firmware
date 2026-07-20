@@ -279,9 +279,23 @@
 // ---- Chart container ----
 .sbse-chart {
     position: relative;
-    aspect-ratio: 2;
+    aspect-ratio: 2.5;
 
     @include media-breakpoint-up(md) {
-        aspect-ratio: 3;
+        aspect-ratio: 4;
     }
+}
+
+// Small heading above each of the two stacked trace charts
+.sbse-chart-heading {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.55);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.3rem;
+}
+
+[data-bs-theme="dark"] {
+    .sbse-chart-heading { color: rgba(255, 255, 255, 0.7); }
 }

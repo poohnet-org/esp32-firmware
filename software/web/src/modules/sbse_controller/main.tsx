@@ -34,6 +34,7 @@ import { Switch } from "../../ts/components/switch";
 import { SwitchableInputNumber } from "../../ts/components/switchable_input_number";
 import { UplotLoader } from "../../ts/components/uplot_loader";
 import { UplotData, UplotPath, UplotWrapperB } from "../../ts/components/uplot_wrapper_2nd";
+import uPlot from "uplot";
 import { ModuleStatus, register_status_provider, StatusResult } from "../../ts/status_registry";
 
 // ---------------------------------------------------------------------------
@@ -559,35 +560,40 @@ interface SbseControllerChartProps {
     samples: Sample[];
 }
 
-class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
+// One line of a trace chart: uPlot series key/name, draw style and how to
+// pull the value out of a Sample.
+interface SeriesSpec {
+    key: string;
+    name: () => string;
+    path: UplotPath;
+    extract: (s: Sample) => number;
+}
+
+// Cursor sync between the stacked trace charts: hovering one shows the
+// crosshair at the same time position on the other.
+const chart_cursor_sync = uPlot.sync("sbse_controller.trace");
+
+class TraceChart extends Component<{samples: Sample[], series: SeriesSpec[], color_cache_group: string}, {}> {
     uplot_loader_ref  = createRef<UplotLoader>();
     uplot_wrapper_ref = createRef<UplotWrapperB>();
 
     update_uplot = () => {
         const samples = this.props.samples;
+        const series  = this.props.series;
         let data: UplotData;
 
         if (samples.length === 0) {
             data = { keys: [null], names: [null], values: [null] };
         } else {
             data = {
-                keys:   [null,                       "grid",    "battery", "setpoint", "target_lo", "target_hi"],
-                names:  [null,
-                         __("sbse_controller.chart.grid"),
-                         __("sbse_controller.chart.battery"),
-                         __("sbse_controller.chart.setpoint"),
-                         __("sbse_controller.chart.target_lo"),
-                         __("sbse_controller.chart.target_hi")],
-                values: [[], [], [], [], [], []],
-                paths:  [null, UplotPath.Line, UplotPath.Line, UplotPath.Line, UplotPath.Step, UplotPath.Step],
+                keys:   [null, ...series.map((spec) => spec.key)],
+                names:  [null, ...series.map((spec) => spec.name())],
+                values: [[],   ...series.map(() => [] as number[])],
+                paths:  [null, ...series.map((spec) => spec.path)],
             };
             for (const s of samples) {
                 data.values[0].push(s.ts);
-                data.values[1].push(s.grid);
-                data.values[2].push(s.battery);
-                data.values[3].push(s.setpoint);
-                data.values[4].push(s.target_lo);
-                data.values[5].push(s.target_hi);
+                series.forEach((spec, i) => data.values[i + 1].push(spec.extract(s)));
             }
         }
 
@@ -595,7 +601,7 @@ class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
         this.uplot_wrapper_ref.current?.set_data(data);
     };
 
-    override componentDidUpdate(prev: SbseControllerChartProps) {
+    override componentDidUpdate(prev: {samples: Sample[]}) {
         if (prev.samples !== this.props.samples) {
             this.update_uplot();
         }
@@ -612,13 +618,14 @@ class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
                     <UplotWrapperB ref={this.uplot_wrapper_ref}
                                    class="sbse-chart"
                                    sub_page="status"
-                                   color_cache_group="sbse_controller.default"
+                                   color_cache_group={this.props.color_cache_group}
                                    show
+                                   sync={chart_cursor_sync}
                                    legend_show
                                    legend_time_label={__("sbse_controller.chart.time")}
                                    legend_time_with_minutes
                                    on_mount={this.update_uplot}
-                                   aspect_ratio={3}
+                                   aspect_ratio={4}
                                    x_format={{hour: "2-digit", minute: "2-digit", second: "2-digit"}}
                                    x_padding_factor={0}
                                    x_include_date={false}
@@ -627,11 +634,41 @@ class SbseControllerChart extends Component<SbseControllerChartProps, {}> {
                                    y_digits={0}
                                    grid_show
                                    padding={[null, 15, null, 5]}
-                                   height_min={180}/>
+                                   height_min={150}/>
                 </UplotLoader>
             </div>
         );
     }
+}
+
+// Two stacked charts instead of one: grid power with the target deadzone
+// (small values around the target range), and setpoint vs. actual battery
+// power (large, often opposite-signed values). Mixing all five series in one
+// plot squashed the y-scale into unreadability.
+const GRID_SERIES: SeriesSpec[] = [
+    { key: "grid",      name: () => __("sbse_controller.chart.grid"),      path: UplotPath.Line, extract: (s) => s.grid },
+    { key: "target_lo", name: () => __("sbse_controller.chart.target_lo"), path: UplotPath.Step, extract: (s) => s.target_lo },
+    { key: "target_hi", name: () => __("sbse_controller.chart.target_hi"), path: UplotPath.Step, extract: (s) => s.target_hi },
+];
+
+const BATTERY_SERIES: SeriesSpec[] = [
+    { key: "setpoint", name: () => __("sbse_controller.chart.setpoint"), path: UplotPath.Line, extract: (s) => s.setpoint },
+    { key: "battery",  name: () => __("sbse_controller.chart.battery"),  path: UplotPath.Line, extract: (s) => s.battery },
+];
+
+function SbseControllerChart({samples}: SbseControllerChartProps) {
+    return (
+        <>
+            <div class="sbse-chart-heading">{__("sbse_controller.chart.grid_heading")}</div>
+            <TraceChart samples={samples}
+                        series={GRID_SERIES}
+                        color_cache_group="sbse_controller.grid"/>
+            <div class="sbse-chart-heading mt-3">{__("sbse_controller.chart.battery_heading")}</div>
+            <TraceChart samples={samples}
+                        series={BATTERY_SERIES}
+                        color_cache_group="sbse_controller.battery"/>
+        </>
+    );
 }
 
 // ---------------------------------------------------------------------------
