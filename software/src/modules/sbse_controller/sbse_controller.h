@@ -97,6 +97,7 @@ private:
     void read_rated_power();                            // one-shot rated-power read (import-floor clamp)
     void read_soc();
     void compute_and_write();
+    int32_t wsptmin_for(int32_t watts) const;  // charge floor of the battery window
     void send_setpoint(int32_t watts);
     void send_import_floor(int32_t floor_w, bool then_setpoint, int32_t watts);  // refresh 41433, chain if due
     void send_zero_w();        // fire-and-forget 0 W write, used by pause + pre_reboot
@@ -223,6 +224,14 @@ private:
     float    ema_setpoint_w     = 0.0f;
 
     int32_t  last_written_w     = 0;
+    // WSptMin as last written to the device by the setpoint block. Tracked
+    // separately from last_written_w because the charge floor depends on
+    // max_charge_w and the rated power, so it can change while the target --
+    // and therefore the deadband decision -- stays put. INT32_MIN = unknown
+    // (never written, or invalidated by pause exit / disconnect because the
+    // device-side window may no longer match); forces the next cycle to
+    // re-write the setpoint block.
+    int32_t  last_written_wsptmin = INT32_MIN;
     uint32_t write_ok_count     = 0;
     uint32_t write_err_count    = 0;
     uint32_t modbus_read_count  = 0;   // FC 3 / FC 4 requests served by the proxy
