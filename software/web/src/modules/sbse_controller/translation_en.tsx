@@ -45,6 +45,8 @@ let x = {
             "mode_block_discharge": "discharge blocked"
         },
         "chart": {
+            "grid_heading":    "Grid power & targets",
+            "battery_heading": "Battery power & setpoint",
             "grid":      "Grid (EMA)",
             "battery":   "Battery",
             "setpoint":  "Setpoint",

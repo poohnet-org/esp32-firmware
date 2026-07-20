@@ -21,8 +21,8 @@ A self-contained ESP32 firmware module that:
    Inverter") can steer it.
 
 SBSE-only by design: the register map (addresses, byte order, the
-`-15000` companion value, etc.) is hard-coded. Other inverters would
-need a different module.
+asymmetric setpoint window, the 41433 import floor, etc.) is
+hard-coded. Other inverters would need a different module.
 
 ## File layout
 
@@ -198,6 +198,45 @@ Network-connect handling: the controller waits for the network module
 to publish `network_connected = true` before kicking off the Modbus
 client connection. The Modbus *server* binds `0.0.0.0:port` and doesn't
 need to wait.
+
+## Control loop — flow diagram
+
+One tick, from timer to inverter write. Read transactions chain via
+callbacks (the shared-pool client serialises them); the dashed edges are
+the failure path.
+
+```mermaid
+flowchart TD
+    TICK(["tick() — every tick_ms (default 300 ms)"]) --> WD["watchdog_tick()<br/>revert Modbus-server overrides after watchdog_s of silence"]
+    WD --> GATE{"begin_cycle()<br/>enabled? connected?<br/>not paused? no cycle in flight?"}
+    GATE -- "no" --> SKIP(["skip this tick"])
+    GATE -- "yes" --> RG["read_grid_power()<br/>unit 2 · reg 31249<br/>→ grid_w_raw (import > 0)"]
+    RG --> RB["read_battery_power()<br/>unit 3 · reg 31585<br/>→ battery_w_raw = discharge − charge"]
+    RB --> RATED["read_rated_power() — one-shot<br/>reg 30231 → inverter_rated_w<br/>(fallback 5000 W)"]
+    RATED --> RS["read_soc() — every soc_interval_ms<br/>reg 30845 → soc_pct"]
+    RG -. "read failure" .-> FAIL
+    RB -. "read failure" .-> FAIL["cycle_failed()<br/>read_fail_streak++; at<br/>safety_zero_after_failures:<br/>send_safety_zero() pins 0/0"]
+
+    RS --> EMA
+    subgraph COMPUTE ["compute_and_write()"]
+        direction TB
+        EMA["grid EMA: ema ← α_grid·raw + (1−α_grid)·ema<br/>d_ema = Δema"] --> FM{"force mode?<br/>(SMA OpMod 2289/2290)"}
+        FM -- "yes" --> FORCE["raw_setpoint = modbus_force_w<br/>(P + D bypassed)"]
+        FM -- "no" --> PID["natural_grid = ema + battery_w (= load − PV)<br/>target = clamp(natural_grid, lo, hi)<br/>raw_setpoint = battery_w + Kp·(ema − target) + Kd·d_ema<br/>direction lock per regime"]
+        FORCE --> CLAMP
+        PID --> CLAMP["clamps: SoC edges (0 % / 100 %),<br/>[−max_charge_w … +max_discharge_w],<br/>output EMA (α_setpoint) → target_w"]
+        CLAMP --> TRACE["trace_history.add_sample()<br/>(1 Hz ring buffer)"]
+        TRACE --> KA["keep-alive: idle pulse / refresh<br/>deadband: write if |target_w − last_written| ≥ deadband_w<br/>import floor due? (charging ∧ 5 s elapsed)"]
+    end
+
+    KA --> DISP{"dispatch"}
+    DISP -- "floor due" --> WF["send_import_floor()<br/>reg 41433 = −min(max_charge_w, rated)<br/>volatile (~10 s watchdog):<br/>refreshed every 5 s while charging"]
+    DISP -- "setpoint due" --> WS["send_setpoint()<br/>regs 41467/41469:<br/>WSptMax = target_w<br/>WSptMin = min(target_w, −min(max_charge_w, rated))"]
+    WF -- "chains when setpoint also due" --> WS
+    WF -- "floor only" --> FIN
+    DISP -- "neither due" --> FIN
+    WS --> FIN(["finish_cycle(mode)<br/>publish mode pill + state"])
+```
 
 ## One tick — data flow
 

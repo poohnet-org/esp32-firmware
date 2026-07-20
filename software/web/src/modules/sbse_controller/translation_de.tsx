@@ -45,6 +45,8 @@ let x = {
             "mode_block_discharge": "Entladen gesperrt"
         },
         "chart": {
+            "grid_heading":    "Netzleistung & Zielbereich",
+            "battery_heading": "Batterieleistung & Sollwert",
             "grid":      "Netz (EMA)",
             "battery":   "Batterie",
             "setpoint":  "Sollwert",
