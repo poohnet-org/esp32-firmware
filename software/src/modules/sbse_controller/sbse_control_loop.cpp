@@ -596,22 +596,17 @@ void SbseController::compute_and_write()
 
     // 9) Grid-import floor. When charging (target < 0) the inverter's WSptMin
     //    (41433) must be held negative or the battery cannot pull from the grid
-    //    (firmware >= 3.16 defaults it to 0). It is volatile: the device reverts
-    //    it to 0 after a ~10 s watchdog, and that watchdog is only reset by a
-    //    *changed* value -- re-writing the same watts does NOT pet it, so a
-    //    constant refresh lets the floor revert mid-charge and the charge
-    //    periodically collapses to the ~0 W floor. We therefore alternate the
-    //    magnitude by 1 W on each refresh so every write is a genuine change,
-    //    and refresh every IMPORT_FLOOR_REFRESH (< watchdog) independent of the
-    //    setpoint deadband. Clamped to the rated power so the write is never
-    //    rejected. Not written while discharging/idle (reverts to 0 harmlessly).
-    const bool charging = target_w < 0;
-    const int32_t floor_mag = std::min(max_charge_w, inverter_rated_w);
-    const int32_t floor_w = charging
-        ? -std::max(1, floor_mag - (import_floor_wiggle ? 1 : 0))
-        : 0;
-    const bool floor_due = charging
+    //    (firmware >= 3.16 defaults it to 0). It is volatile (~10 s watchdog), so
+    //    refresh it every IMPORT_FLOOR_REFRESH regardless of the setpoint
+    //    deadband -- a steady charge stops changing target_w, and a deadband-
+    //    gated refresh would let the floor revert mid-charge and stall the charge.
+    //    Clamp to the rated power so the write is never rejected. Not written
+    //    while discharging/idle; it reverts to 0 on its own (harmless).
+    const bool charging   = target_w < 0;
+    const int32_t floor_w = charging ? -std::min(max_charge_w, inverter_rated_w) : 0;
+    const bool floor_due  = charging
         && (import_floor_last_us == -1_us
+            || floor_w != import_floor_last_w
             || deadline_elapsed(import_floor_last_us + IMPORT_FLOOR_REFRESH));
 
     // Dispatch: open/refresh the floor and/or write the battery setpoint. The
@@ -721,7 +716,6 @@ void SbseController::send_import_floor(int32_t floor_w, bool then_setpoint, int3
         if (result == TFModbusTCPClientTransactionResult::Success) {
             import_floor_last_w  = floor_w;
             import_floor_last_us = now_us();
-            import_floor_wiggle  = !import_floor_wiggle;   // next refresh writes a changed value
         } else {
             // Non-fatal: the battery command below still goes out; charging just
             // stays blocked until the floor takes. Log so a persistent reject
