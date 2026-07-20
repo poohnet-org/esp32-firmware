@@ -64,11 +64,11 @@ static constexpr uint16_t BATTERY_SOC_REG_COUNT      = 2;
 // Battery active-power setpoint window. Writes two consecutive int32be values:
 //   [0] Bat.WCtlCom.WSptMax (41467) -- max battery power (+discharge / -charge)
 //   [1] Bat.WCtlCom.WSptMin (41469) -- min battery power
-// Both halves are pinned to the same value so the inverter is FORCED to the
-// commanded battery power. On firmware >= 3.16 the pair is a self-regulated
-// window, not drive-to-bound: leaving WSptMin wide (the old fixed -15000) lets
-// the inverter self-regulate and ignore the command. Pinning both restores the
-// "battery = commanded power" behaviour verified on the device.
+// On firmware >= 3.16 the pair is a self-regulated window, not drive-to-bound.
+// send_setpoint() writes it ASYMMETRICALLY (see there): pinned on the charge side
+// so grid-import charging is actually forced (a wide WSptMin lets the inverter
+// self-regulate and ignore the charge command), but left with a charge floor on
+// the discharge/idle side so the inverter keeps PV priority in zero-export mode.
 static constexpr uint16_t POWER_SETPOINT_ADDR        = 41467;
 static constexpr uint16_t POWER_SETPOINT_REG_COUNT   = 4;
 
@@ -655,8 +655,24 @@ int32_t SbseController::pick_keepalive_pulse()
 
 void SbseController::send_setpoint(int32_t watts)
 {
-    write_int32be(buf_setpoint + 0, watts);   // WSptMax (41467)
-    write_int32be(buf_setpoint + 2, watts);   // WSptMin (41469) -- pinned equal to force the exact power
+    // Asymmetric battery-power window [WSptMin, WSptMax]:
+    //   WSptMax = watts (the commanded battery power).
+    //   WSptMin = watts               when charging (watts < 0): pin the window so
+    //             the inverter is FORCED to the commanded charge (grid-import
+    //             charging is ignored otherwise on fw >= 3.16), and charging makes
+    //             room for PV rather than curtailing it.
+    //           = -min(max_charge_w, rated)  when discharging/idle (watts >= 0):
+    //             leave a charge floor so the inverter self-regulates -- it can
+    //             ramp PV to cover a load step instead of being forced to discharge
+    //             (which, in zero-export mode, would curtail PV to load - discharge),
+    //             and it can absorb a transient surplus into the battery instead of
+    //             curtailing PV. Floored at the operator's charge cap so surplus
+    //             absorption still respects max_charge_w.
+    const int32_t wsptmin = (watts < 0)
+        ? watts
+        : -std::min(max_charge_w, inverter_rated_w);
+    write_int32be(buf_setpoint + 0, watts);     // WSptMax (41467)
+    write_int32be(buf_setpoint + 2, wsptmin);   // WSptMin (41469)
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
 

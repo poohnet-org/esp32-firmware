@@ -435,8 +435,12 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
   ── rejected. Not written while discharging/idle (reverts to 0 harmlessly).
   floor_due = (target_w < 0) and (5 s elapsed / value changed / first charge)
 
-  if setpoint_write and floor_due → write 41433 (unit 3) then POWER_SETPOINT (41467/41469, pinned)
-  elif setpoint_write             → write POWER_SETPOINT (41467/41469 both = target_w, unit 3)
+  ── Battery window write is asymmetric: WSptMax = target_w always; WSptMin =
+  ── target_w when charging (pin, to force grid-import charge) else -max_charge_w
+  ── (charge floor, so the inverter keeps PV priority / can buffer surplus in
+  ── zero-export instead of curtailing PV to feed a forced discharge).
+  if setpoint_write and floor_due → write 41433 (unit 3) then POWER_SETPOINT (41467/41469, unit 3)
+  elif setpoint_write             → write POWER_SETPOINT (41467=target_w, 41469=asymmetric, unit 3)
   elif floor_due                  → write 41433 (unit 3)
   else                            → skip write (inverter holds last setpoint)
 
