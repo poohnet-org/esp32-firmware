@@ -257,9 +257,8 @@ compute_and_write()
  │
  │  # Grid-import floor: while charging (target < 0) hold inverter WSptMin
  │  # (41433) at −min(max_charge_w, inverter_rated_w). Firmware ≥ 3.16 defaults
- │  # it to 0, which blocks net grid import; it is volatile (~10 s watchdog that
- │  # only resets on a CHANGED value, so the floor is alternated by 1 W each
- │  # refresh) and is refreshed every IMPORT_FLOOR_REFRESH (5 s), INDEPENDENT of the
+ │  # it to 0, which blocks net grid import; it is volatile (~10 s watchdog) so
+ │  # it is refreshed every IMPORT_FLOOR_REFRESH (5 s), INDEPENDENT of the
  │  # setpoint deadband. Not written while discharging/idle (reverts to 0).
  │  floor_due = (target < 0) and (timer elapsed / value changed / first time)
  │
