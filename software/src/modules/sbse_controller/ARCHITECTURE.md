@@ -95,16 +95,17 @@ two helper classes know only their narrow concerns.
 ### `SbseTraceHistory`
 
 ```cpp
-void add_sample(int32_t grid_w, int32_t battery_w,
-                int32_t setpoint_w, int32_t target_w);
+void add_sample(int32_t grid_w, int32_t battery_w, int32_t setpoint_w,
+                int32_t target_lo_w, int32_t target_hi_w);
 void register_url(const char *path);
 ```
 
 - Self-contained. No callbacks back into the controller.
 - Internal 1 Hz throttle: call as often as you like (e.g. every
   300 ms tick), it drops the in-between calls.
-- Each sample is `(micros_t captured_us, int16_t × 4 channels)` = 12 B.
-- `CAPACITY = 300` → 3.6 KB RAM.
+- Each sample is `(micros_t captured_us, int16_t × 5 channels)`
+  = 18 B (+ alignment padding).
+- `CAPACITY = 300` → ~6 KB RAM.
 
 ### `SbseModbusServer`
 
@@ -226,7 +227,7 @@ flowchart TD
         FORCE --> CLAMP
         PID --> CLAMP["clamps: SoC edges (0 % / 100 %),<br/>[−max_charge_w … +max_discharge_w],<br/>output EMA (α_setpoint) → target_w"]
         CLAMP --> TRACE["trace_history.add_sample()<br/>(1 Hz ring buffer)"]
-        TRACE --> KA["keep-alive: idle pulse / refresh<br/>deadband: write if |target_w − last_written| ≥ deadband_w<br/>import floor due? (charging ∧ 5 s elapsed)"]
+        TRACE --> KA["keep-alive: idle pulse / refresh<br/>write if |target_w − last_written| ≥ deadband_w<br/>or the window floor (WSptMin) changed<br/>import floor due? (charging ∧ 5 s elapsed)"]
     end
 
     KA --> DISP{"dispatch"}
@@ -293,6 +294,7 @@ compute_and_write()
  │
  │  setpoint_write = keepalive_pulse or keepalive_refresh
  │                   or |target − last_written_w| ≥ deadband_w
+ │                   or WSptMin(target) ≠ last-written WSptMin   # cap change / pause / reconnect
  │
  │  # Grid-import floor: while charging (target < 0) hold inverter WSptMin
  │  # (41433) at −min(max_charge_w, inverter_rated_w). Firmware ≥ 3.16 defaults

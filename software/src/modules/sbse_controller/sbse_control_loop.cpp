@@ -176,6 +176,10 @@ void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*re
     keepalive_pending_zero = false;
     // Drop the import-floor timer so the next charge re-opens 41433 immediately.
     import_floor_last_us = -1_us;
+    // The disconnect may have been an inverter reboot, in which case the
+    // device-side battery window is back at its defaults. Invalidate the
+    // written-window marker so the first cycle after reconnect re-asserts it.
+    last_written_wsptmin = INT32_MIN;
     state.get("read_fail_streak")->updateUint(0);
     // Drop the proxy cache freshness markers -- evcc reads will return NaN
     // sentinels until the next successful proxy poll repopulates them.
@@ -215,6 +219,11 @@ bool SbseController::begin_cycle()
             battery_idle_since_us  = -1_us;
             keepalive_pending_zero = false;
             import_floor_last_us   = -1_us;
+            // Pause parked the window at 0/0 behind the loop's back (buf_zero
+            // write). Invalidate the written-window marker so the first
+            // post-pause cycle re-asserts the setpoint block even when the
+            // target is still within the deadband of last_written_w.
+            last_written_wsptmin   = INT32_MIN;
         } else {
             publish_mode(Mode::Paused);
             return false;
@@ -330,9 +339,11 @@ void SbseController::read_rated_power()
             }
         }
         if (inverter_rated_w == 0) {
-            // Read failed or implausible -- fall back so we don't retry forever.
+            // Read failed or the value was implausible -- fall back so we
+            // don't retry forever. (result may read "Success" here: that is
+            // the implausible-value case.)
             inverter_rated_w = INV_RATED_POWER_FALLBACK_W;
-            logger.printfln("rated-power read failed (%s%s%s); import-floor clamp falls back to %d W",
+            logger.printfln("rated-power read unusable (%s%s%s); import-floor clamp falls back to %d W",
                             get_tf_modbus_tcp_client_transaction_result_name(result),
                             err != nullptr ? " / " : "",
                             err != nullptr ? err   : "",
@@ -590,10 +601,27 @@ void SbseController::compute_and_write()
         && deadline_elapsed(last_write_ok
                             + micros_t{static_cast<int64_t>(keepalive_interval_s) * 1000000LL});
     const bool bypass_deadband = keepalive_fired || keepalive_return || keepalive_refresh_due;
+    //    A fourth bypass: the setpoint block also carries WSptMin (the charge
+    //    floor, see send_setpoint), which depends on max_charge_w and the
+    //    rated power -- it can change while the target stays put (live cap
+    //    change at steady state), and it is invalidated (INT32_MIN) when the
+    //    device-side window may no longer match what we last wrote (pause
+    //    parked it at 0/0, reconnect after a possible inverter reboot). A
+    //    deadband gated purely on the target would leave the stale floor on
+    //    the device until the next keep-alive refresh -- or forever with
+    //    keep-alive disabled. The floor gets the same deadband as the target:
+    //    when the commanded charge exceeds the rating (WSptMin then tracks
+    //    the target 1:1), sub-deadband target jitter must not force a write
+    //    every cycle.
+    const int32_t wsptmin_next = wsptmin_for(target_w);
+    const bool window_floor_stale =
+        last_written_wsptmin == INT32_MIN
+        || std::abs(wsptmin_next - last_written_wsptmin) >= deadband_w;
     const bool setpoint_write =
         bypass_deadband
         || last_write_ok == -1_us
-        || std::abs(target_w - last_written_w) >= deadband_w;
+        || std::abs(target_w - last_written_w) >= deadband_w
+        || window_floor_stale;
 
     // 9) Grid-import floor. When charging (target < 0) the inverter's WSptMin
     //    (41433) must be held negative or the battery cannot pull from the grid
@@ -654,6 +682,14 @@ int32_t SbseController::pick_keepalive_pulse()
     return charge ? -pulse_c : pulse_d;
 }
 
+int32_t SbseController::wsptmin_for(int32_t watts) const
+{
+    // Charge floor of the battery window (see send_setpoint): the charge side
+    // stays open down to the operator's cap, bounded by the inverter rating,
+    // and never above WSptMax so the window is always well-formed.
+    return std::min(watts, -std::min(max_charge_w, inverter_rated_w));
+}
+
 void SbseController::send_setpoint(int32_t watts)
 {
     // Asymmetric battery-power window [WSptMin, WSptMax]:
@@ -671,7 +707,7 @@ void SbseController::send_setpoint(int32_t watts)
     //             Floored at the operator's charge cap so surplus absorption
     //             still respects max_charge_w. std::min with watts keeps the
     //             window well-formed if the command exceeds the cap.
-    const int32_t wsptmin = std::min(watts, -std::min(max_charge_w, inverter_rated_w));
+    const int32_t wsptmin = wsptmin_for(watts);
     write_int32be(buf_setpoint + 0, watts);     // WSptMax (41467)
     write_int32be(buf_setpoint + 2, wsptmin);   // WSptMin (41469)
 
@@ -683,7 +719,7 @@ void SbseController::send_setpoint(int32_t watts)
                      POWER_SETPOINT_REG_COUNT,
                      buf_setpoint,
                      MODBUS_TIMEOUT,
-    [this, watts](TFModbusTCPClientTransactionResult result, const char *err) {
+    [this, watts, wsptmin](TFModbusTCPClientTransactionResult result, const char *err) {
         if (result != TFModbusTCPClientTransactionResult::Success) {
             ++write_err_count;
             state.get("write_err_count")->updateUint(write_err_count);
@@ -703,8 +739,9 @@ void SbseController::send_setpoint(int32_t watts)
             return;
         }
 
-        last_written_w  = watts;
-        last_write_ok   = now_us();
+        last_written_w       = watts;
+        last_written_wsptmin = wsptmin;
+        last_write_ok        = now_us();
         ++write_ok_count;
         state.get("write_ok_count")->updateUint(write_ok_count);
 
@@ -842,8 +879,9 @@ void SbseController::send_safety_zero()
                      MODBUS_TIMEOUT,
     [this](TFModbusTCPClientTransactionResult result, const char *err) {
         if (result == TFModbusTCPClientTransactionResult::Success) {
-            last_written_w = 0;
-            last_write_ok  = now_us();
+            last_written_w       = 0;
+            last_written_wsptmin = 0;   // safety write pins WSptMin = WSptMax = 0
+            last_write_ok        = now_us();
             ++write_ok_count;
             state.get("write_ok_count")->updateUint(write_ok_count);
             publish_setpoint(0);

@@ -326,14 +326,6 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
             const ac = API.get("sbse_controller/active_config");
             const now = Date.now() / 1000;
             const cutoff = now - CHART_WINDOW_S;
-            const prev = this.state.samples;
-
-            // Walk past any samples that fell out of the window, then build
-            // the new array in one slice + push instead of clone-then-shift.
-            let first_kept = 0;
-            while (first_kept < prev.length && prev[first_kept].ts < cutoff) {
-                first_kept++;
-            }
             const new_sample: Sample = {
                 ts:        now,
                 grid:      st.grid_w_ema,
@@ -342,10 +334,20 @@ export class SbseControllerStatus extends Component<{}, SbseControllerStatusStat
                 target_lo: ac.grid_charge_target_w,
                 target_hi: ac.grid_discharge_target_w,
             };
-            const samples = first_kept === 0
-                ? [...prev, new_sample]
-                : [...prev.slice(first_kept), new_sample];
-            this.setState({samples});
+            // Functional update so back-to-back state events can't clobber
+            // each other's sample. Walk past any samples that fell out of the
+            // window, then build the new array in one slice + push.
+            this.setState((prev_state) => {
+                const prev = prev_state.samples;
+                let first_kept = 0;
+                while (first_kept < prev.length && prev[first_kept].ts < cutoff) {
+                    first_kept++;
+                }
+                const samples = first_kept === 0
+                    ? [...prev, new_sample]
+                    : [...prev.slice(first_kept), new_sample];
+                return { samples };
+            });
         });
     }
 

@@ -426,6 +426,7 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   setpoint_write = keepalive_pulse or keepalive_refresh
                    or |target_w − last_written_w| ≥ deadband_w
+                   or WSptMin(target_w) ≠ last-written WSptMin  ── cap change / pause / reconnect
 
   ── Grid-import floor. Charging needs the inverter's WSptMin (41433) held
   ── negative, else the inverter may not draw from the grid and the battery

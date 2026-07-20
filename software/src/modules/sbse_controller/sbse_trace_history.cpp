@@ -83,8 +83,9 @@ void SbseTraceHistory::register_url(const char *path)
 {
     server.on(path, HTTP_GET, [this](WebServerRequest request) {
         StringBuilder sb;
-        // Worst-case per sample: "[9999999,-32768,-32768,-32768,-32768],"
-        // = ~43 bytes. CAPACITY * 50 + 64 outer = ~15 kB.
+        // Worst-case per sample (6 fields):
+        // "[4294967295,-32768,-32768,-32768,-32768,-32768]," = 48 bytes.
+        // CAPACITY * 50 + 64 outer = ~15 kB.
         if (!sb.setCapacity(CAPACITY * 50 + 64)) {
             return request.send_plain(500, "history alloc failed");
         }
