@@ -270,12 +270,16 @@ compute_and_write()
 finish_cycle(mode)   ── publishes the mode pill on the dashboard
 ```
 
-\* **Asymmetric battery window:** `WSptMax` is always `target`. `WSptMin` is
-`target` when charging (`target < 0`) — pinned, so grid-import charging is
-actually forced — but `-max_charge_w` (clamped to rating) when discharging/idle
-(`target ≥ 0`), leaving the inverter a charge floor so it keeps PV priority in
-zero-export mode (ramp PV rather than force a discharge that curtails it, and
-absorb transient surplus into the battery) while still respecting `max_charge_w`.
+\* **Asymmetric battery window:** `WSptMax` is always `target`; `WSptMin` is
+always `min(target, -min(max_charge_w, rated))` — the charge side stays open.
+On firmware ≥ 3.16 the inverter self-regulates to
+`clamp(load − PV, WSptMin, WSptMax)`, so a negative `WSptMax` forces "charge at
+least `|target|`" (the grid imports whatever PV cannot supply while 41433 is
+open — verified at register level), and the open `WSptMin` keeps PV priority in
+zero-export mode: PV ramps to cover load steps instead of a forced discharge
+curtailing it, and PV jumps (cloud clears) are absorbed into the battery
+immediately instead of being curtailed until the control loop catches up —
+still respecting `max_charge_w`.
 
 Read failures increment `read_fail_streak`. When the streak crosses
 `safety_zero_after_failures`, `cycle_failed` arms a one-shot 0 W
