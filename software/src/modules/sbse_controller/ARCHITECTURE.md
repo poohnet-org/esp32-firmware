@@ -263,12 +263,19 @@ compute_and_write()
  │  floor_due = (target < 0) and (timer elapsed / value changed / first time)
  │
  │  if setpoint_write and floor_due → send_import_floor(...) → send_setpoint(target)
- │  elif setpoint_write             → send_setpoint(target)     → write 41467/41469 (4 reg, pinned)
+ │  elif setpoint_write             → send_setpoint(target)     → write 41467/41469 (4 reg, asymmetric*)
  │  elif floor_due                  → send_import_floor(...)     → write 41433 (2 reg)
  │  else                            → skip write
  ▼
 finish_cycle(mode)   ── publishes the mode pill on the dashboard
 ```
+
+\* **Asymmetric battery window:** `WSptMax` is always `target`. `WSptMin` is
+`target` when charging (`target < 0`) — pinned, so grid-import charging is
+actually forced — but `-max_charge_w` (clamped to rating) when discharging/idle
+(`target ≥ 0`), leaving the inverter a charge floor so it keeps PV priority in
+zero-export mode (ramp PV rather than force a discharge that curtails it, and
+absorb transient surplus into the battery) while still respecting `max_charge_w`.
 
 Read failures increment `read_fail_streak`. When the streak crosses
 `safety_zero_after_failures`, `cycle_failed` arms a one-shot 0 W
