@@ -250,15 +250,13 @@ private:
     bool     keepalive_next_charge  = false;
     bool     keepalive_pending_zero = false;  // next cycle: force a 0 W return write
 
-    // Grid-import floor (inverter WSptMin, 41433) bookkeeping. It defaults to 0 on
-    // firmware >= 3.16 (blocks grid-charging) and is volatile (~10 s watchdog), so
-    // it is refreshed to -min(max_charge_w, inverter_rated_w) every
-    // IMPORT_FLOOR_REFRESH while charging, independent of the setpoint deadband.
-    // inverter_rated_w is read once (0 = not yet read) to bound the floor so the
-    // write is never rejected as out-of-range.
+    // Grid-import floor (inverter WSptMin, 41433). It defaults to 0 on firmware
+    // >= 3.16 (blocks grid-charging) and the System Manager resets it to 0 on a
+    // ~20 s beat, so the loop re-writes -min(max_charge_w, inverter_rated_w) on
+    // EVERY tick while charging (no bookkeeping needed; see the register-map
+    // comment in sbse_control_loop.cpp). inverter_rated_w is read once (0 = not
+    // yet read) to bound the floor so the write is never rejected out-of-range.
     int32_t  inverter_rated_w    = 0;
-    micros_t import_floor_last_us = -1_us;
-    int32_t  import_floor_last_w  = 0;
 
     // --- Modbus staging buffers (per-cycle, owned by the module) ---
     // Sized via the BUF_*_LEN constants above; the static_asserts in

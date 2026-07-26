@@ -227,11 +227,11 @@ flowchart TD
         FORCE --> CLAMP
         PID --> CLAMP["clamps: SoC edges (0 % / 100 %),<br/>[−max_charge_w … +max_discharge_w],<br/>output EMA (α_setpoint) → target_w"]
         CLAMP --> TRACE["trace_history.add_sample()<br/>(1 Hz ring buffer)"]
-        TRACE --> KA["keep-alive: idle pulse / refresh<br/>write if |target_w − last_written| ≥ deadband_w<br/>or the window floor (WSptMin) changed<br/>import floor due? (charging ∧ 5 s elapsed)"]
+        TRACE --> KA["keep-alive: idle pulse / refresh<br/>write if |target_w − last_written| ≥ deadband_w<br/>or the window floor (WSptMin) changed<br/>import floor due? (charging → every tick)"]
     end
 
     KA --> DISP{"dispatch"}
-    DISP -- "floor due" --> WF["send_import_floor()<br/>reg 41433 = −min(max_charge_w, rated)<br/>volatile (~10 s watchdog):<br/>refreshed every 5 s while charging"]
+    DISP -- "floor due" --> WF["send_import_floor()<br/>reg 41433 = −min(max_charge_w, rated)<br/>System Manager resets it to 0 every ~20 s:<br/>re-written every tick while charging"]
     DISP -- "setpoint due" --> WS["send_setpoint()<br/>regs 41467/41469:<br/>WSptMax = target_w<br/>WSptMin = min(target_w, −min(max_charge_w, rated))"]
     WF -- "chains when setpoint also due" --> WS
     WF -- "floor only" --> FIN
@@ -298,10 +298,15 @@ compute_and_write()
  │
  │  # Grid-import floor: while charging (target < 0) hold inverter WSptMin
  │  # (41433) at −min(max_charge_w, inverter_rated_w). Firmware ≥ 3.16 defaults
- │  # it to 0, which blocks net grid import; it is volatile (~10 s watchdog) so
- │  # it is refreshed every IMPORT_FLOOR_REFRESH (5 s), INDEPENDENT of the
- │  # setpoint deadband. Not written while discharging/idle (reverts to 0).
- │  floor_due = (target < 0) and (timer elapsed / value changed / first time)
+ │  # it to 0, which blocks net grid import; the embedded System Manager
+ │  # re-broadcasts the device setpoint defaults every ~20 s, resetting 41433
+ │  # to 0 (verified 2026-07-26, sbse_modbus_test.py floorrate). Re-written on
+ │  # EVERY tick while charging, INDEPENDENT of the setpoint deadband — that
+ │  # bounds each forced-charge dip at the device reaction time (~0.3–0.6 s
+ │  # instead of 3–5.5 s with the former 5 s refresh). 41433 is an ASO
+ │  # (Anlagensteuerobjekt) setpoint: cyclic writes are safe, no flash wear.
+ │  # Not written while discharging/idle (reverts to 0).
+ │  floor_due = (target < 0)
  │
  │  if setpoint_write and floor_due → send_import_floor(...) → send_setpoint(target)
  │  elif setpoint_write             → send_setpoint(target)     → write 41467/41469 (4 reg, asymmetric*)

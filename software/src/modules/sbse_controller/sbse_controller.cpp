@@ -354,7 +354,6 @@ void SbseController::register_urls()
         // and drop any in-flight two-tick keep-alive event.
         battery_idle_since_us  = -1_us;
         keepalive_pending_zero = false;
-        import_floor_last_us   = -1_us;
         // Pause parked the window at 0/0 behind the loop's back; force the
         // first post-resume cycle to re-assert the setpoint block.
         last_written_wsptmin   = INT32_MIN;

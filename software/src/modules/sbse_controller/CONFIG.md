@@ -430,11 +430,14 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
 
   ── Grid-import floor. Charging needs the inverter's WSptMin (41433) held
   ── negative, else the inverter may not draw from the grid and the battery
-  ── won't charge from it (firmware ≥ 3.16 defaults 41433 to 0). It is volatile
-  ── (~10 s watchdog), so refresh it every 5 s while charging, independent of the
-  ── deadband. Clamped to −min(max_charge_w, inverter_rated_w) so it is never
-  ── rejected. Not written while discharging/idle (reverts to 0 harmlessly).
-  floor_due = (target_w < 0) and (5 s elapsed / value changed / first charge)
+  ── won't charge from it (firmware ≥ 3.16 defaults 41433 to 0). The embedded
+  ── System Manager resets it to 0 on a ~20 s beat, so it is re-written every
+  ── tick while charging, independent of the deadband (bounds each forced-
+  ── charge dip at the ~0.3–0.6 s device reaction time; 41433 is an ASO
+  ── setpoint — cyclic writes are safe). Clamped to −min(max_charge_w,
+  ── inverter_rated_w) so it is never rejected. Not written while
+  ── discharging/idle (reverts to 0 harmlessly).
+  floor_due = (target_w < 0)
 
   ── Battery window write is asymmetric: WSptMax = target_w always; WSptMin =
   ── min(target_w, -max_charge_w) always (charge side open). The inverter runs at

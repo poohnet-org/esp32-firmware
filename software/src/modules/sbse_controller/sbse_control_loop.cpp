@@ -77,13 +77,18 @@ static constexpr uint16_t POWER_SETPOINT_REG_COUNT   = 4;
 // (41433, S32 W). On firmware >= 3.16 this DEFAULTS TO 0, which forbids negative
 // inverter power = forbids net grid import = blocks charging the battery from the
 // grid (discharge is unaffected). We hold it negative while charging to permit
-// import. It is VOLATILE -- the device reverts it to 0 after a ~10 s watchdog --
-// so it must be refreshed periodically (see IMPORT_FLOOR_REFRESH), independent of
-// the setpoint deadband. 41431 (WSptMax) is left to the inverter (it maintains it
-// at rating and rejects out-of-range writes).
+// import. The embedded System Manager re-broadcasts the device setpoint DEFAULTS
+// on an exact ~20 s beat, resetting 41433 to 0 (verified at register level
+// 2026-07-26; the reset is external and cannot be disabled short of external
+// plant control, 44577). The charge therefore dips to surplus-only from each
+// reset until our next re-write: 5 s refresh -> 3-5.5 s dips; 1 s -> ~1 s;
+// every 300 ms tick -> 0.3-0.6 s, the device's own reaction-time floor
+// (measured with sbse_modbus_test.py floorrate). So the floor is refreshed
+// EVERY TICK while charging -- 41433 is a cyclic-write-safe Setpoint register
+// ("Anlagensteuerobjekt", RAM-backed, no flash wear). 41431 (WSptMax) is left
+// to the inverter (the System Manager's feed-in limiter actively manages it).
 static constexpr uint16_t INV_WSPTMIN_ADDR           = 41433;
 static constexpr uint16_t INV_WSPTMIN_REG_COUNT      = 2;
-static constexpr micros_t IMPORT_FLOOR_REFRESH       = 5_s;    // < ~10 s device watchdog
 
 // Rated active power (Nameplate WMaxOutRtg, 30231, U32 W), read once and used to
 // clamp the import floor so we never send an out-of-range value that the inverter
@@ -174,8 +179,6 @@ void SbseController::disconnect_callback(TFGenericTCPClientDisconnectReason /*re
     // and drop any in-flight two-tick keep-alive event.
     battery_idle_since_us = -1_us;
     keepalive_pending_zero = false;
-    // Drop the import-floor timer so the next charge re-opens 41433 immediately.
-    import_floor_last_us = -1_us;
     // The disconnect may have been an inverter reboot, in which case the
     // device-side battery window is back at its defaults. Invalidate the
     // written-window marker so the first cycle after reconnect re-asserts it.
@@ -218,7 +221,6 @@ bool SbseController::begin_cycle()
             // return-write -- pause already wrote 0.
             battery_idle_since_us  = -1_us;
             keepalive_pending_zero = false;
-            import_floor_last_us   = -1_us;
             // Pause parked the window at 0/0 behind the loop's back (buf_zero
             // write). Invalidate the written-window marker so the first
             // post-pause cycle re-asserts the setpoint block even when the
@@ -625,18 +627,16 @@ void SbseController::compute_and_write()
 
     // 9) Grid-import floor. When charging (target < 0) the inverter's WSptMin
     //    (41433) must be held negative or the battery cannot pull from the grid
-    //    (firmware >= 3.16 defaults it to 0). It is volatile (~10 s watchdog), so
-    //    refresh it every IMPORT_FLOOR_REFRESH regardless of the setpoint
-    //    deadband -- a steady charge stops changing target_w, and a deadband-
-    //    gated refresh would let the floor revert mid-charge and stall the charge.
-    //    Clamp to the rated power so the write is never rejected. Not written
-    //    while discharging/idle; it reverts to 0 on its own (harmless).
+    //    (firmware >= 3.16 defaults it to 0). The System Manager resets it to 0
+    //    on a ~20 s beat (see the register-map comment), so it is re-written on
+    //    EVERY tick while charging, independent of the setpoint deadband --
+    //    that bounds each externally-forced charge dip by one tick instead of
+    //    a refresh timer. Clamp to the rated power so the write is never
+    //    rejected. Not written while discharging/idle; it reverts to 0 on its
+    //    own (harmless).
     const bool charging   = target_w < 0;
     const int32_t floor_w = charging ? -std::min(max_charge_w, inverter_rated_w) : 0;
-    const bool floor_due  = charging
-        && (import_floor_last_us == -1_us
-            || floor_w != import_floor_last_w
-            || deadline_elapsed(import_floor_last_us + IMPORT_FLOOR_REFRESH));
+    const bool floor_due  = charging;
 
     // Dispatch: open/refresh the floor and/or write the battery setpoint. The
     // shared Modbus client serialises transactions, so when both are due the
@@ -755,7 +755,7 @@ void SbseController::send_import_floor(int32_t floor_w, bool then_setpoint, int3
     // Refresh the inverter's grid-import floor (41433). On success, either chain
     // into the battery-setpoint write (when it was also due this cycle) or close
     // the cycle. The battery-setpoint watchdog markers (last_write_ok /
-    // last_written_w) are NOT touched here -- only the floor's own timer.
+    // last_written_w) are NOT touched here.
     write_int32be(buf_import_floor + 0, floor_w);
 
     auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
@@ -767,10 +767,7 @@ void SbseController::send_import_floor(int32_t floor_w, bool then_setpoint, int3
                      buf_import_floor,
                      MODBUS_TIMEOUT,
     [this, floor_w, then_setpoint, watts](TFModbusTCPClientTransactionResult result, const char *err) {
-        if (result == TFModbusTCPClientTransactionResult::Success) {
-            import_floor_last_w  = floor_w;
-            import_floor_last_us = now_us();
-        } else {
+        if (result != TFModbusTCPClientTransactionResult::Success) {
             // Non-fatal: the battery command below still goes out; charging just
             // stays blocked until the floor takes. Log so a persistent reject
             // (e.g. floor beyond rating) is visible.
