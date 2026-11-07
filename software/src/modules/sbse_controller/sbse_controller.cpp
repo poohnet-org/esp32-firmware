@@ -1125,6 +1125,12 @@ void SbseController::solis_rc_timeout_tick()
     solis_rc_deadline_us = -1_us;
     solis_settings.set(SbseSolis::REG_RC_FORCE, SbseSolis::RC_FORCE_NONE);
     solis_settings.set(SbseSolis::REG_RD_ENABLE, 0);
+    // Drop the current limits too: WARP writes 0 to the opposite direction
+    // along with a force command, which would otherwise linger as a block
+    // (and read as "charging / discharging blocked" to other clients).
+    // Deviates from the real inverter, where the limits persist.
+    solis_settings.erase(SbseSolis::REG_CHARGE_LIMIT_DA);
+    solis_settings.erase(SbseSolis::REG_DISCHARGE_LIMIT_DA);
     set_modbus_command(ModbusCommand::Auto, 0);
     refresh_running_mode();
 }
