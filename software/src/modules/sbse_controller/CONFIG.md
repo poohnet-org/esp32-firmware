@@ -75,7 +75,7 @@ identical semantics:
 | `write_ok_count` | uint32 | Lifetime counter of successful setpoint writes. |
 | `write_err_count` | uint32 | Lifetime counter of failed setpoint writes. |
 | `read_fail_streak` | uint32 | Current run of consecutive failed read cycles; resets on the next successful cycle. |
-| `modbus_active` | bool | `true` if a Modbus TCP server write has been applied within the watchdog window. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
+| `modbus_active` | bool | `true` while a Modbus TCP client is steering the controller. SMA mode: a setpoint write has been applied within the watchdog window (it also overrides caps / grid target, even in auto). GoodWe / Solis modes: a non-auto command (force, block, idle, grid target) is in force; back to auto -- client "normal" write, RC / dispatch timeout -- clears it. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
 | `modbus_cmd` | string | Protocol-neutral command from the Modbus client: `auto` (P controller in charge), `force_charge` or `force_discharge`; GoodWe additionally `idle` (battery held at 0 W), `no_discharge` / `no_charge` (P controller with one direction blocked) and `grid_target` (P controller chasing the client's grid target). Every protocol adapter translates into this. |
 | `modbus_grid_target_w` | int32 | Grid target set by the client while `modbus_cmd` is `grid_target` (GoodWe buy/sell power), else `0`. Positive = import. |
 | `modbus_op_mod` | uint16 | SMA protocol only: last `OpMod` value received (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). Stays `2424` in GoodWe mode. |

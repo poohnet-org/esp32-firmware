@@ -1151,8 +1151,14 @@ void SbseController::set_modbus_command(ModbusCommand cmd, int32_t power_w)
     modbus_cmd_power_w   = forcing ? std::max(power_w, int32_t{0}) : 0;
     modbus_grid_target_w = cmd == ModbusCommand::GridTarget ? power_w : 0;
     last_modbus_write_us = now_us();
-    modbus_active        = true;
-    state.get("modbus_active") ->updateBool(true);
+    // "A Modbus client is steering": on the SMA path any setpoint write
+    // also mutates active_config (caps / grid target), so even auto keeps
+    // overrides in force for the watchdog to revert. The GoodWe / Solis
+    // adapters only change the command -- auto there means nothing is in
+    // force, so the MB badge goes off (WARP's "normal", RC timeouts).
+    modbus_active        = cmd != ModbusCommand::Auto
+                        || modbus_server_protocol == SbseModbusProtocol::Sma;
+    state.get("modbus_active") ->updateBool(modbus_active);
     state.get("modbus_cmd")    ->updateString(modbus_command_name(modbus_cmd));
     state.get("modbus_force_w")->updateInt(modbus_force_setpoint_w());
     state.get("modbus_grid_target_w")->updateInt(modbus_grid_target_w);
