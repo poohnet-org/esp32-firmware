@@ -301,10 +301,10 @@ Emulates a Solis S5/S6 hybrid inverter (Solis "ESINV-33000ID" hybrid protocol) o
 
 | Window | Content | Served values |
 |---|---|---|
-| `33000..33299` | live data | `33000` model = `0x0340`, `33003` protocol version 3, `33004..33019` serial `SBSE<uid>…` (ASCII, 2 chars per register), `33022..33027` clock; `33029` PV total (U32 kWh); `33057` PV power (string 1); `33079` / `33151` inverter power = PV + battery; `33095` status 3 (generating); `33130` / `33263` meter power (S32, export positive); `33132` mirror of `43110`; `33135` battery direction (0 charge, 1 discharge); `33139` SoC; `33140` SoH 100; `33143` / `33144` BMS current limits 100.0 A (the SBSE doesn't expose them; non-limiting value); `33147` household load; `33149` battery power (S32, **positive = charging**, matching both evcc templates); `33165` battery discharge total (U32 kWh); `33281` power factor 1.00 |
-| `34500..34509` | remote-dispatch capability | all `0`: `34502 ≠ 0xAA55`, so remote dispatch (`44100+`) is not offered |
+| `33000..33299` | live data | `33000` model = `0x0340`, `33001` / `33002` DSP / HMI firmware `0xFB10` (Solis HMI versions look like `FB00`; lower values make the Tibber app ask for a firmware update), `33003` protocol version 3, `33004..33019` serial `SBSE<uid>…` (ASCII, 2 chars per register), `33022..33027` clock; `33029` PV total (U32 kWh); `33057` PV power (string 1); `33079` / `33151` inverter power = PV + battery; `33095` status 3 (generating); `33130` / `33263` meter power (S32, export positive); `33132` mirror of `43110`; `33135` battery direction (0 charge, 1 discharge); `33043` battery temperature, `33133` / `33141` battery voltage, `33134` / `33142` battery current (from SMA `Bat.TmpVal` / `Bat.Vol` / `Bat.Amp`, 30843..30852, polled by the proxy cache); `33139` SoC; `33140` SoH 100; `33143` / `33144` BMS charge / discharge current limits = `max_charge_w` / `max_discharge_w` ÷ battery voltage, rounded up (clients compute V × I as the available power; 0 V made the Tibber app warn about reduced discharge power; 100.0 A while the voltage is unknown). The configured current limits `43012` / `43013` and `43117` / `43118` report the same values unless a client writes its own; `33147` household load; `33149` battery power (S32, discharge positive; clients that use \|P\| with the direction flag `33135`, like the Tibber app and evcc's `solis-hybrid-s`, get the right sign, evcc's `solis-hybrid` (RHI) template would see it inverted); `33165` battery discharge total (U32 kWh); `33281` power factor 1.00 |
+| `34000..34999` | extended input registers | `34502 = 0xAA55` (remote dispatch offered), `34503 = 3` (dispatch version), everything else `0`. The Tibber Bridge reads `34391`, `34502..34504`, `34621` and `34753` here; a real Solis answers them, so an `IllegalDataAddress` makes the Tibber setup abort. |
 | `35000..35009` | inverter type | `35000 = 0x0340`: protocol 3, model code `0x40` = 1-phase HV hybrid (S5-EH1P class, the SBSE's topology). `0x80` would be the S6 1-phase HV hybrid. |
-| `43000..43999`, `44000..44299` | settings | shadow table (160 entries) of what the client wrote; `43000..43005` = live clock. Defaults: `43007` = 190 (on), `43024` reserve SoC 10, `43110` = 1 (self-use), `43117` / `43118` max currents 100.0 A, `43282` RC timeout 5 min, all else `0` |
+| `43000..43999`, `44000..44299` | settings | shadow table (160 entries) of what the client wrote; `43000..43005` = live clock. Defaults: `43007` = 190 (on), `43010` max charge SoC 100, `43011` overdischarge SoC 10, `43018` force-charge SoC 5, `44109` / `44110` / `44111` dispatch SoC lower / upper / reserve 10 / 100 / 10 (the Tibber app wants ≥ 50 % between min and max SoC), `43024` reserve SoC 10, `43110` = 1 (self-use), `43282` RC timeout 5 min, all else `0` |
 
 **Writes** (FC 6 / FC 16) are accepted in both settings windows and stored. Only the remote-control registers have an effect, applied 200 ms after the last write to any of them:
 
@@ -314,7 +314,19 @@ Emulates a Solis S5/S6 hybrid inverter (Solis "ESINV-33000ID" hybrid protocol) o
 | `1` force charge | `43136` × 10 W | `force_charge` (`idle` at 0 W) |
 | `2` force discharge | `43129` × 10 W | `force_discharge` (`idle` at 0 W) |
 
-Values > 2 are rejected with `IllegalDataValue`. As on the real inverter, a force command lapses back to `auto` (and `43135` to `0`) unless the client re-writes it within `43282` minutes (default 5). Storage mode (`43110`), time-of-use slots and the remote-dispatch block are stored and logged but **not interpreted yet**: the event log shows whether Tibber uses them, and they can be mapped once that's known. Watchdog and operator takeover work as for GoodWe (any request keeps the command alive; takeover resets `43135`).
+Values > 2 are rejected with `IllegalDataValue`. As on the real inverter, a force command lapses back to `auto` (and `43135` to `0`) unless the client re-writes it within `43282` minutes (default 5).
+
+**Remote dispatch** (`44100..44112`, protocol Ver3.4; the Tibber Bridge reads `44100+17`) takes precedence over remote control while `44100 = 1`. The power is `44106..44107` (S32, high word first, W/10); `44101` is the failsafe interval in minutes (default 5), after which the command lapses to `auto` and `44100` to `0` unless re-written:
+
+| `44105` (mode) | Command |
+|---|---|
+| `1` hold | `idle` |
+| `2` battery power | power > 0: `force_charge`; < 0: `force_discharge`; 0: `idle` |
+| `3` grid power, `4` grid port power | `grid_target` = −power (positive = export on the wire); needs `modbus_server_authority = 2`, else `auto` |
+| `5` self-consumption | `auto` |
+| `6` feed-in priority | `no_charge` |
+
+The power sign per mode comes from the solis_modbus integration and is unverified against the Solis spec; the logged writes will show whether it matches. Import/export caps (`44102..44104`), function bits (`44108`) and SoC limits (`44109..44111`) are stored and logged but not interpreted. Storage mode (`43110`) and time-of-use slots are stored and logged but **not interpreted yet** either: the event log shows whether Tibber uses them, and they can be mapped once that's known. Watchdog and operator takeover work as for GoodWe (any request keeps the command alive; takeover resets `43135`).
 
 ## Grid targets
 

@@ -162,6 +162,7 @@ private:
                                             uint16_t reg_count,
                                             const uint16_t *regs);
     void apply_solis_rc();
+    void apply_solis_dispatch();              // 44100+ remote dispatch
     void fill_solis_live(SbseSolis::Live *live);
     void solis_rc_timeout_tick();
 

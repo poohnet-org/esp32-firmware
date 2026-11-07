@@ -31,7 +31,7 @@ struct SbseSolisWindow {
 };
 
 static constexpr SbseSolisWindow SOLIS_WIN_LIVE      = {33000, 33300};
-static constexpr SbseSolisWindow SOLIS_WIN_DISPATCH  = {34500, 34510};
+static constexpr SbseSolisWindow SOLIS_WIN_EXT       = {34000, 35000};
 static constexpr SbseSolisWindow SOLIS_WIN_TYPE      = {35000, 35010};
 static constexpr SbseSolisWindow SOLIS_WIN_SETTINGS  = {43000, 44000};
 static constexpr SbseSolisWindow SOLIS_WIN_RD        = {44000, 44300};
@@ -60,6 +60,18 @@ static void solis_fill_clock(SbseRegisterWriter &w, uint16_t base, const SbseSol
     w.u16(static_cast<uint16_t>(base + 5),   live.second);
 }
 
+// Battery current limit [0.1 A] for a power cap: max_w / V, rounded up so
+// V x I is never below the cap. The SBSE doesn't expose BMS limits; clients
+// compute V x I as the available power. 100.0 A while the voltage is unknown.
+static uint16_t solis_limit_da(const SbseSolis::Live &live, int32_t max_w)
+{
+    const uint32_t v_cv = live.bat_voltage_cv;
+    if (v_cv == 0) return 1000;
+    const uint32_t p  = static_cast<uint32_t>(max_w > 0 ? max_w : 0);
+    const uint32_t da = (p * 1000u + v_cv - 1u) / v_cv;
+    return static_cast<uint16_t>(da > 0xFFFFu ? 0xFFFFu : da);
+}
+
 static void solis_fill_live(SbseRegisterWriter &w, const SbseSolis::Live &live,
                             const SbseSolis::Settings &settings)
 {
@@ -74,8 +86,8 @@ static void solis_fill_live(SbseRegisterWriter &w, const SbseSolis::Live &live,
 
     // Identification.
     w.u16(33000, SbseSolis::INVERTER_TYPE);                    // model no
-    w.u16(33001, 1);                                           // DSP version
-    w.u16(33002, 1);                                           // HMI version
+    w.u16(33001, SbseSolis::FIRMWARE_VERSION);                 // DSP version
+    w.u16(33002, SbseSolis::FIRMWARE_VERSION);                 // HMI version
     w.u16(33003, SbseSolis::INVERTER_TYPE >> 8);               // protocol version
     w.str(33004, 16, live.serial, '\0');                       // serial, 2 chars/reg
     solis_fill_clock(w, 33022, live);
@@ -87,17 +99,30 @@ static void solis_fill_live(SbseRegisterWriter &w, const SbseSolis::Live &live,
 
     w.s32(33130, export_w);                                    // meter active power (export +)
     w.u16(33132, settings.get(SbseSolis::REG_STORAGE_CONTROL)); // storage control mirror
+    // Battery voltage / current / temperature from the SBSE (SMA 30843+).
+    const uint32_t v_cv = live.bat_voltage_cv;
+    if (live.bat_temp_dc != INT32_MIN) {
+        w.s16(33043, live.bat_temp_dc);                        // battery temperature [0.1 degC]
+    }
+    if (v_cv > 0) {
+        w.u16(33133, static_cast<uint16_t>(v_cv / 10u > 0xFFFFu ? 0xFFFFu : v_cv / 10u));   // [0.1 V]
+        w.u16(33141, static_cast<uint16_t>(v_cv > 0xFFFFu ? 0xFFFFu : v_cv));               // BMS [0.01 V]
+    }
+    if (live.bat_current_ma != INT32_MIN) {
+        const int32_t i_ma = live.bat_current_ma < 0 ? -live.bat_current_ma : live.bat_current_ma;
+        w.u16(33134, static_cast<uint16_t>(i_ma / 100 > 0xFFFF ? 0xFFFF : i_ma / 100));    // [0.1 A]
+        w.s16(33142, (live.battery_w > 0 ? 1 : -1) * (i_ma / 100));                         // BMS [0.1 A]
+    }
     w.u16(33135, live.battery_w > 0 ? 1 : 0);                  // battery dir: 0 charge, 1 discharge
     w.u16(33139, live.soc_pct == 255 ? 0 : live.soc_pct);      // SoC [%]
     w.u16(33140, 100);                                         // SoH [%]
-    // BMS current limits [0.1 A]: the SBSE doesn't expose them; report a
-    // non-limiting 100 A so clients don't think the battery is blocked.
-    w.u16(33143, 1000);
-    w.u16(33144, 1000);
+    // BMS current limits [0.1 A], derived from the operator's caps.
+    w.u16(33143, solis_limit_da(live, live.max_charge_w));
+    w.u16(33144, solis_limit_da(live, live.max_discharge_w));
     w.u16(33147, static_cast<uint16_t>(load_w));               // household load [W]
-    // Battery power: magnitude with the sign of "charging". evcc's RHI
-    // template negates it (signed), the S-series one uses |P| x 33135 --
-    // both give discharge positive with this encoding.
+    // Battery power: signed, discharge positive. The direction flag 33135 is
+    // authoritative for the Tibber app and evcc's S-series template (they use
+    // |P|); evcc's RHI template would read the sign inverted.
     w.s32(33149, live.battery_w > 0 ? bat_abs : -bat_abs);
     w.s32(33151, inverter_w);                                  // AC grid port power
     w.u32(33165, solis_wh_to_kwh(live.bat_discharge_wh));      // battery discharge total [kWh]
@@ -110,10 +135,15 @@ uint16_t SbseSolis::settings_default(uint16_t addr)
 {
     switch (addr) {
         case 43007:            return 190;   // inverter power: on
+        // SoC window: the Tibber app wants >= 50 % between min and max.
+        case 43010:            return 100;   // max charge SoC [%]
+        case 43011:            return 10;    // overdischarge (min) SoC [%]
+        case 43018:            return 5;     // force-charge SoC [%]
+        case 44109:            return 10;    // dispatch SoC lower limit [%]
+        case 44110:            return 100;   // dispatch SoC upper limit [%]
+        case 44111:            return 10;    // dispatch reserve SoC [%]
         case 43024:            return 10;    // battery reserve SoC [%]
         case REG_STORAGE_CONTROL: return 1;  // self-use
-        case 43117:            return 1000;  // max charge current [0.1 A]
-        case 43118:            return 1000;  // max discharge current [0.1 A]
         case REG_RC_TIMEOUT_MIN: return 5;   // RC timeout [min]
         default:               return 0;
     }
@@ -137,8 +167,11 @@ TFModbusTCPExceptionCode SbseSolis::read(uint16_t start, uint16_t count, uint16_
 
     if (solis_inside(SOLIS_WIN_LIVE, start, count)) {
         solis_fill_live(w, live, settings);
-    } else if (solis_inside(SOLIS_WIN_DISPATCH, start, count)) {
-        // 34502 != 0xAA55: remote dispatch (44100+) not offered.
+    } else if (solis_inside(SOLIS_WIN_EXT, start, count)) {
+        // Extended block. The Tibber Bridge reads 34391, 34502..34504,
+        // 34621 and 34753 here; only the dispatch capability is modelled.
+        w.u16(REG_RD_CAPABILITY, RD_CAPABILITY_MAGIC);
+        w.u16(REG_RD_VERSION,    RD_VERSION);
     } else if (solis_inside(SOLIS_WIN_TYPE, start, count)) {
         w.u16(35000, INVERTER_TYPE);
     } else if (solis_inside(SOLIS_WIN_SETTINGS, start, count)
@@ -147,6 +180,19 @@ TFModbusTCPExceptionCode SbseSolis::read(uint16_t start, uint16_t count, uint16_
             out[i] = settings.get(static_cast<uint16_t>(start + i));
         }
         solis_fill_clock(w, 43000, live);
+        // Configured charge / discharge current limits [0.1 A]: report the
+        // same value as the BMS limits (33143 / 33144) unless the client set
+        // its own. A configured limit far above the BMS limit reads as "BMS
+        // is throttling right now" -- the Tibber app then warns about
+        // reduced discharge power.
+        static constexpr uint16_t CHARGE_LIMIT_REGS[]    = {43012, 43117};
+        static constexpr uint16_t DISCHARGE_LIMIT_REGS[] = {43013, 43118};
+        for (uint16_t addr : CHARGE_LIMIT_REGS) {
+            if (!settings.contains(addr)) w.u16(addr, solis_limit_da(live, live.max_charge_w));
+        }
+        for (uint16_t addr : DISCHARGE_LIMIT_REGS) {
+            if (!settings.contains(addr)) w.u16(addr, solis_limit_da(live, live.max_discharge_w));
+        }
     } else {
         return TFModbusTCPExceptionCode::IllegalDataAddress;
     }

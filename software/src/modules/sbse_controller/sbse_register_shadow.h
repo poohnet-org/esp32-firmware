@@ -49,6 +49,17 @@ public:
         return default_fn(addr);
     }
 
+    // Has a client written this register?
+    bool contains(uint16_t addr) const
+    {
+        for (size_t i = 0; i < count; ++i) {
+            if (entries[i].addr == addr) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // false = table full (the write is dropped)
     bool set(uint16_t addr, uint16_t value)
     {

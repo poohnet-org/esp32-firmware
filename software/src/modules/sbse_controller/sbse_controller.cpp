@@ -914,6 +914,12 @@ void SbseController::fill_solis_live(SbseSolis::Live *live)
     live->pv_w      = modbus_proxy.get_cached(30773, 2, &v) ? static_cast<int32_t>(v) : -1;   // DcMs.Watt[0]
     live->pv_total_wh      = modbus_proxy.get_cached(30513, 4, &v) ? v : UINT64_MAX;  // Metering.TotWhOut
     live->bat_discharge_wh = modbus_proxy.get_cached(31401, 4, &v) ? v : UINT64_MAX;  // CmpBMS.GetBatDschWh
+    // SMA NaN: 0xFFFFFFFF (all ones, filtered by get_cached) / 0x80000000.
+    live->bat_voltage_cv = modbus_proxy.get_cached(30851, 2, &v) ? static_cast<uint32_t>(v) : 0;  // Bat.Vol
+    live->bat_current_ma = modbus_proxy.get_cached(30843, 2, &v) ? static_cast<int32_t>(static_cast<uint32_t>(v)) : INT32_MIN;  // Bat.Amp
+    live->bat_temp_dc    = modbus_proxy.get_cached(30849, 2, &v) ? static_cast<int32_t>(static_cast<uint32_t>(v)) : INT32_MIN;  // Bat.TmpVal
+    live->max_charge_w    = max_charge_w;
+    live->max_discharge_w = max_discharge_w;
     live->serial = solis_serial;
 
     const time_t now = time(nullptr);
@@ -964,7 +970,8 @@ TFModbusTCPExceptionCode SbseController::on_solis_write(
                   || addr == SbseSolis::REG_RC_FORCE
                   || addr == SbseSolis::REG_RC_CHARGE_W
                   || addr == SbseSolis::REG_RC_DISCHARGE_W
-                  || addr == SbseSolis::REG_RC_TIMEOUT_MIN;
+                  || addr == SbseSolis::REG_RC_TIMEOUT_MIN
+                  || (addr >= SbseSolis::REG_RD_FIRST && addr <= SbseSolis::REG_RD_LAST);
     }
     for (uint16_t i = 0; i < reg_count; ++i) {
         if (!solis_settings.set(static_cast<uint16_t>(start_address + i), regs[i])) {
@@ -986,6 +993,13 @@ TFModbusTCPExceptionCode SbseController::on_solis_write(
 
 void SbseController::apply_solis_rc()
 {
+    // Remote dispatch (44100 = 1) takes precedence over the older remote
+    // control (43135) path.
+    if (solis_settings.get(SbseSolis::REG_RD_ENABLE) == 1) {
+        apply_solis_dispatch();
+        return;
+    }
+
     const uint16_t force       = solis_settings.get(SbseSolis::REG_RC_FORCE);
     const int32_t  charge_w    = static_cast<int32_t>(solis_settings.get(SbseSolis::REG_RC_CHARGE_W)) * 10;
     const int32_t  discharge_w = static_cast<int32_t>(solis_settings.get(SbseSolis::REG_RC_DISCHARGE_W)) * 10;
@@ -1017,14 +1031,74 @@ void SbseController::apply_solis_rc()
     refresh_running_mode();
 }
 
+void SbseController::apply_solis_dispatch()
+{
+    using RdMode = SbseSolis::RdMode;
+
+    const uint16_t mode     = solis_settings.get(SbseSolis::REG_RD_MODE);
+    const int32_t  raw      = static_cast<int32_t>(
+        (static_cast<uint32_t>(solis_settings.get(SbseSolis::REG_RD_POWER)) << 16)
+        | solis_settings.get(static_cast<uint16_t>(SbseSolis::REG_RD_POWER + 1)));
+    const int32_t  power_w  = raw * 10;
+    uint16_t failsafe_min   = solis_settings.get(SbseSolis::REG_RD_FAILSAFE_MIN);
+    if (failsafe_min == 0) {
+        failsafe_min = 5;
+    }
+
+    ModbusCommand cmd   = ModbusCommand::Auto;
+    int32_t       power = 0;
+    switch (static_cast<RdMode>(mode)) {
+        case RdMode::Hold:
+            cmd = ModbusCommand::Idle;
+            break;
+        case RdMode::BatteryPower:              // + charge, - discharge
+            if (power_w > 0) {
+                cmd = ModbusCommand::ForceCharge;    power = power_w;
+            } else if (power_w < 0) {
+                cmd = ModbusCommand::ForceDischarge; power = -power_w;
+            } else {
+                cmd = ModbusCommand::Idle;
+            }
+            break;
+        case RdMode::GridPower:                 // + export, - import
+        case RdMode::GridPortPower:
+            if (modbus_server_authority >= ModbusAuthority::Full) {
+                cmd   = ModbusCommand::GridTarget;
+                power = std::clamp(-power_w, int32_t{-750}, int32_t{2500});   // controller: + = import
+            } else {
+                logger.printfln("solis: dispatch mode %u needs modbus_server_authority = full, running auto", mode);
+            }
+            break;
+        case RdMode::FeedInPriority:            // PV to the grid first
+            cmd = ModbusCommand::NoCharge;
+            break;
+        case RdMode::SelfConsumption:
+        default:
+            break;
+    }
+
+    // Failsafe: like the real inverter, the dispatch command lapses unless
+    // the client re-writes it within the failsafe interval.
+    solis_rc_deadline_us = cmd == ModbusCommand::Auto
+                         ? -1_us
+                         : now_us() + micros_t{static_cast<int64_t>(failsafe_min) * 60000000LL};
+
+    logger.printfln("solis: dispatch mode %u, power %ld W, failsafe %u min -> %s %ld W",
+                    mode, static_cast<long>(power_w), failsafe_min,
+                    modbus_command_name(cmd), static_cast<long>(power));
+    set_modbus_command(cmd, power);
+    refresh_running_mode();
+}
+
 void SbseController::solis_rc_timeout_tick()
 {
     if (solis_rc_deadline_us == -1_us || !deadline_elapsed(solis_rc_deadline_us)) {
         return;
     }
-    logger.printfln("solis: RC timeout, back to auto");
+    logger.printfln("solis: remote control / dispatch timeout, back to auto");
     solis_rc_deadline_us = -1_us;
     solis_settings.set(SbseSolis::REG_RC_FORCE, SbseSolis::RC_FORCE_NONE);
+    solis_settings.set(SbseSolis::REG_RD_ENABLE, 0);
     set_modbus_command(ModbusCommand::Auto, 0);
     refresh_running_mode();
 }
@@ -1068,6 +1142,7 @@ void SbseController::clear_modbus_command()
     goodwe_settings.set(SbseGoodwe::REG_EMS_POWER, 0);
     // Solis adapter: remote control off.
     solis_settings.set(SbseSolis::REG_RC_FORCE, SbseSolis::RC_FORCE_NONE);
+    solis_settings.set(SbseSolis::REG_RD_ENABLE, 0);
     solis_rc_deadline_us = -1_us;
     modbus_active        = false;
     last_modbus_write_us = -1_us;

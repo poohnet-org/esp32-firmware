@@ -77,12 +77,19 @@ const SbseModbusProxy::Group SbseModbusProxy::GROUPS[] = {
     { 31259, 10, UPSTREAM_GRID_METER_UNIT, 26, Source::Cached,      NaNStyle::UnsignedMax   },
     // 31435..31440  per-phase A             3x uint32
     { 31435, 6, UPSTREAM_GRID_METER_UNIT, 36, Source::Cached,      NaNStyle::UnsignedMax   },
+
+    // ---- inverter (unit 3), battery block -------------------------------
+    // 30843..30852  Bat.Amp (S32, mA), Bat.ChaStt, -, Bat.TmpVal (S32,
+    // 0.1 degC), Bat.Vol (U32, 0.01 V). Used by the Solis adapter. Listed
+    // after the synthesized 30845 group, so SMA reads of 30845 still get the
+    // live SoC (find_group returns the first match).
+    { 30843, 10, UPSTREAM_INVERTER_UNIT,  42, Source::Cached,      NaNStyle::UnsignedMax   },
 };
 
 const size_t SbseModbusProxy::NUM_GROUPS = sizeof(GROUPS) / sizeof(GROUPS[0]);
 
 // Manual cache layout (offsets above) -- the last group ends at
-// cache_offset 36 + reg_count 6 = 42, well below CACHE_SIZE (64). Add a
+// cache_offset 42 + reg_count 10 = 52, below CACHE_SIZE (64). Add a
 // new group? Reserve a slot at the next free offset and bump the bound.
 
 // ---------------------------------------------------------------------------
