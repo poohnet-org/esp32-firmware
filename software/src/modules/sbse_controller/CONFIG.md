@@ -37,9 +37,10 @@ identical semantics:
 | `port` | `502` | uint16 | Modbus TCP port on the SBSE. Standard is 502. |
 | `tick_ms` | `300` | ms, 50…5000 | Control loop period. One read-compute-write cycle per tick. Lower = faster grid tracking but more Modbus traffic. |
 | `soc_interval_ms` | `1000` | ms, ≥ `tick_ms`, ≤ 60000 | How often to poll battery SoC. SoC changes slowly; polling every tick wastes bandwidth. |
-| `modbus_server_enabled` | `false` | bool | Enable the SMA-compatible Modbus TCP server (see [Modbus TCP server](#modbus-tcp-server-external-control) below). Requires a reboot to take effect. |
-| `modbus_server_port` | `502` | uint16 | Port the SMA-compatible server listens on. Requires a reboot to take effect. |
-| `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `0` means "accept any". Live-tunable (no reboot needed). |
+| `modbus_server_enabled` | `false` | bool | Enable the inverter-emulating Modbus TCP server (see [Modbus TCP server](#modbus-tcp-server-external-control) below). Requires a reboot to take effect. |
+| `modbus_server_protocol` | `0` (= SMA) | uint8, 0…1 | Which inverter the server emulates: `0` = SMA hybrid inverter, `1` = GoodWe hybrid inverter. Exactly one protocol is served at a time. **GoodWe is not implemented yet**: in that mode the server accepts connections but rejects every request with `IllegalDataAddress`. A change restarts the listener and reverts any Modbus overrides (same as a watchdog expiry). The dashboard moves the unit ID between the protocol defaults (`3` / `247`) unless a custom one is set. |
+| `modbus_server_port` | `502` | uint16 | Port the server listens on. Requires a reboot to take effect. |
+| `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `3` is the SMA convention, `247` the GoodWe one. `0` means "accept any". Live-tunable (no reboot needed). |
 | `modbus_server_watchdog_s` | `60` | seconds, 0…3600 | Watchdog timeout. If no Modbus write arrives within this many seconds, the controller reverts the live overrides to the persistent config and exits force-mode. `0` disables the watchdog. Live-tunable. |
 | `modbus_server_authority` | `1` (= caps) | uint8, 0…2 | How much of the operator's `active_config` an external Modbus client is allowed to overwrite on every WriteMultipleRegisters at register 40793. Live-tunable. See [Modbus authority](#modbus-authority-modbus_server_authority) below for the per-value behaviour table. |
 
@@ -75,8 +76,9 @@ identical semantics:
 | `write_err_count` | uint32 | Lifetime counter of failed setpoint writes. |
 | `read_fail_streak` | uint32 | Current run of consecutive failed read cycles; resets on the next successful cycle. |
 | `modbus_active` | bool | `true` if a Modbus TCP server write has been applied within the watchdog window. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
-| `modbus_op_mod` | uint16 | Last `OpMod` value received from the Modbus server (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). |
-| `modbus_force_w` | int32 | Battery power currently being commanded under force-mode (`0` when the P controller is running). Negative = charging, positive = discharging. |
+| `modbus_cmd` | string | Protocol-neutral command from the Modbus client: `auto` (P controller in charge), `force_charge` or `force_discharge`. Every protocol adapter translates into this. |
+| `modbus_op_mod` | uint16 | SMA protocol only: last `OpMod` value received (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). Stays `2424` in GoodWe mode. |
+| `modbus_force_w` | int32 | Battery power currently being commanded under force-mode (`0` when `modbus_cmd` is `auto`). Negative = charging, positive = discharging. |
 | `last_error` | string | Last error message produced by a read or write. |
 
 ## Commands
@@ -119,7 +121,11 @@ via MQTT.
 
 ## Modbus TCP server (external control)
 
-When `config.modbus_server_enabled = true`, the controller listens on `config.modbus_server_port` (default `502`) and accepts the **same WriteMultipleRegisters traffic that the WARP charger's "SMA Hybrid Inverter" battery class sends to a real Sunny Boy Storage**. The controller is the server; an external WARP / energy manager / scripting client is the client.
+When `config.modbus_server_enabled = true`, the controller listens on `config.modbus_server_port` (default `502`) and emulates the inverter selected by `config.modbus_server_protocol`. The controller is the server; an external WARP / energy manager / scripting client is the client.
+
+Each protocol adapter translates its wire format into one protocol-neutral command (`state.modbus_cmd`: `auto` / `force_charge` / `force_discharge` plus a power), and into the `active_config` changes that `modbus_server_authority` allows. Watchdog, authority and arbitration below apply to every protocol.
+
+The rest of this section describes the **SMA** protocol (`modbus_server_protocol = 0`): it accepts the **same WriteMultipleRegisters traffic that the WARP charger's "SMA Hybrid Inverter" battery class sends to a real Sunny Boy Storage**. The GoodWe protocol (`1`) is not implemented yet.
 
 ### Accepted registers
 
@@ -394,8 +400,8 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
   lo = grid_charge_target_w
   hi = grid_discharge_target_w           ── validator: hi >= lo
 
-  if modbus_force_w != 0:                          ── SMA OpMod 2289 / 2290
-    raw_setpoint = modbus_force_w                  ── (P+D bypassed)
+  if modbus_cmd != auto:                           ── force_charge / force_discharge
+    raw_setpoint = ∓modbus_cmd_power_w             ── (P+D bypassed)
   else:                                            ── P + implicit-I + D, regime-aware
     natural_grid = ema_grid + battery_now          ── grid if battery=0; = load − PV
     target       = clamp(natural_grid, lo, hi)     ── hi above the deadzone,

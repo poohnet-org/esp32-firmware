@@ -466,8 +466,8 @@ void SbseController::compute_and_write()
     //       stays "discharging" and the setpoint doesn't slam to 0 (the
     //       prior implementation's bug).
     float raw_setpoint;
-    if (modbus_force_w != 0) {
-        raw_setpoint = static_cast<float>(modbus_force_w);
+    if (modbus_cmd != ModbusCommand::Auto) {
+        raw_setpoint = static_cast<float>(modbus_force_setpoint_w());
     } else {
         const float lo_f          = static_cast<float>(grid_charge_target_w);
         const float hi_f          = static_cast<float>(grid_discharge_target_w);
@@ -559,14 +559,14 @@ void SbseController::compute_and_write()
         // in between the two ticks (force-mode write, etc.). If force-mode
         // is active, its setpoint is already in target_w from the chase
         // block above and the keep-alive event is silently abandoned.
-        if (modbus_force_w == 0) {
+        if (modbus_cmd == ModbusCommand::Auto) {
             keepalive_return = true;
             target_w         = 0;
             ema_setpoint_w   = 0.0f;
         }
     } else if (keepalive_interval_s > 0
                && target_w == 0
-               && modbus_force_w == 0
+               && modbus_cmd == ModbusCommand::Auto
                && battery_idle_since_us != -1_us
                && deadline_elapsed(battery_idle_since_us
                                    + micros_t{static_cast<int64_t>(keepalive_interval_s) * 1000000LL})) {
@@ -922,10 +922,10 @@ SbseController::Mode SbseController::current_running_mode() const
     // Selects which "is running" Mode the controller should report.
     // ForceCharge/Discharge are visually distinct in the dashboard pill so the
     // operator can see at a glance that an external Modbus client is steering.
-    if (modbus_force_w < 0) {
+    if (modbus_cmd == ModbusCommand::ForceCharge) {
         return Mode::ForceCharge;
     }
-    if (modbus_force_w > 0) {
+    if (modbus_cmd == ModbusCommand::ForceDischarge) {
         return Mode::ForceDischarge;
     }
     // The block-* modes are derived from the saturation limits regardless of

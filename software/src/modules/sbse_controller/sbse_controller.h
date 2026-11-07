@@ -50,14 +50,24 @@ public:
     void pre_reboot() override;
 
     // How much authority an external Modbus client has over the controller's
-    // active_config. Always-honoured: the SMA OpMod (force_charge /
-    // force_discharge) commands; the force power is taken from BatChaMaxW /
-    // BatDchgMaxW in the payload and clamped by the operator's caps at write
-    // time. See CONFIG.md for the full table.
+    // active_config. Always-honoured: force_charge / force_discharge commands
+    // (SMA: OpMod 2289 / 2290); the force power is taken from the payload
+    // (SMA: BatChaMaxW / BatDchgMaxW) and clamped by the operator's caps at
+    // write time. See CONFIG.md for the full table.
     enum class ModbusAuthority : uint8_t {
         ForceOnly = 0,   // ignore BatChaMax, BatDchgMax, GridWSpt in active_config
         Caps      = 1,   // apply max_charge_w + max_discharge_w; grid targets preserved
         Full      = 2,   // also apply GridWSpt to both grid targets (hard-mode chase)
+    };
+
+    // Protocol-neutral command from the external Modbus client. Each
+    // protocol adapter (SMA OpMod + setpoint block, later GoodWe EMS mode +
+    // power) translates its wire format into this; the control loop only
+    // ever looks at the neutral form.
+    enum class ModbusCommand : uint8_t {
+        Auto           = 0,   // P controller in charge (under whatever caps are set)
+        ForceCharge    = 1,   // charge at modbus_cmd_power_w, P + D bypassed
+        ForceDischarge = 2,   // discharge at modbus_cmd_power_w, P + D bypassed
     };
 
     enum class Mode : uint8_t {
@@ -104,25 +114,32 @@ private:
     void send_safety_zero();
     int32_t pick_keepalive_pulse();  // alternating-sign small pulse, respecting SoC + caps
 
-    // SMA Modbus TCP server -- the server class itself is just the protocol
-    // adapter; these methods carry the semantics (sticky OpMod, force-mode,
-    // active_config wiring, watchdog).
-    TFModbusTCPExceptionCode on_modbus_op_mod_write(uint32_t op_mod);
-    TFModbusTCPExceptionCode on_modbus_setpoint_write(uint16_t start_address,
-                                                      uint16_t reg_count,
-                                                      const uint16_t *regs);
-    TFModbusTCPExceptionCode on_modbus_read(TFModbusTCPFunctionCode fc,
-                                            uint16_t start_address,
-                                            uint16_t reg_count,
-                                            uint16_t *out_regs);
-    void apply_modbus_setpoint_partial(uint16_t start_address,
-                                       uint16_t reg_count,
-                                       const uint16_t *regs);
-    void revert_modbus_overrides();      // watchdog expiry / operator takeover
+    // Modbus TCP server. The server class is just the network/protocol
+    // adapter. The on_sma_* handlers translate the SMA wire format (sticky
+    // OpMod, setpoint block) into the protocol-neutral ModbusCommand +
+    // active_config changes; everything below them is protocol-independent.
+    TFModbusTCPExceptionCode on_sma_op_mod_write(uint32_t op_mod);
+    TFModbusTCPExceptionCode on_sma_setpoint_write(uint16_t start_address,
+                                                   uint16_t reg_count,
+                                                   const uint16_t *regs);
+    TFModbusTCPExceptionCode on_sma_read(TFModbusTCPFunctionCode fc,
+                                         uint16_t start_address,
+                                         uint16_t reg_count,
+                                         uint16_t *out_regs);
+    void apply_sma_setpoint_partial(uint16_t start_address,
+                                    uint16_t reg_count,
+                                    const uint16_t *regs);
+
+    // Protocol-neutral Modbus command handling.
+    void set_modbus_command(ModbusCommand cmd, int32_t power_w);  // + mark client active
+    void clear_modbus_command();         // back to Auto, client inactive (no active_config change)
+    void revert_modbus_overrides();      // watchdog expiry: clear + restore active_config
     void watchdog_tick();
+    int32_t modbus_force_setpoint_w() const;  // signed force setpoint, 0 when Auto
+    void load_modbus_server_config();    // mirror config.modbus_server_* into the cached fields
 
     // Proxy register cache for the SMA-hybrid read set. Polled on its own
-    // scheduled tick, served by on_modbus_read().
+    // scheduled tick, served by on_sma_read().
     void run_proxy_poll();
     void cycle_failed(const char *where,
                       TFModbusTCPClientTransactionResult result,
@@ -174,10 +191,11 @@ private:
     uint32_t keepalive_interval_s = 480;     // 0 disables; default 8 min (under the ~10-15 min standby threshold)
     int32_t  keepalive_pulse_w    = 50;
 
-    // SMA Modbus TCP server -- the network/protocol adapter. Its persistent
+    // Modbus TCP server -- the network/protocol adapter. Its persistent
     // config is mirrored into the controller's cached fields below so the
     // dispatch handlers can read them without going through the server.
     SbseModbusServer modbus_server;
+    SbseModbusProtocol modbus_server_protocol = SbseModbusProtocol::Sma;
     bool     modbus_server_enabled    = false;
     uint16_t modbus_server_port       = 502;
     uint8_t  modbus_server_unit_id    = 3;       // 0 = accept any unit id
@@ -190,14 +208,16 @@ private:
     SbseModbusProxy modbus_proxy;
     uint64_t modbus_proxy_task_id = 0;
 
-    // Sticky OpMod (40236) latched between writes. 2424 = Default/Normal (P loop).
-    // 2289 = Battery charging (force-charge). 2290 = Battery discharging.
-    uint16_t modbus_op_mod           = 2424;
+    // SMA adapter state: sticky OpMod (40236) latched between writes and
+    // interpreted on the next setpoint-block write. 2424 = Default/Normal
+    // (P loop), 2289 = Battery charging, 2290 = Battery discharging.
+    uint16_t sma_op_mod              = 2424;
 
-    // Non-zero -> bypass the P controller and command this value directly
-    // (positive = discharge, negative = charge). Cleared by the watchdog,
-    // operator takeover, or a 2424 OpMod write.
-    int32_t  modbus_force_w          = 0;
+    // Protocol-neutral command currently in force. power_w is the magnitude
+    // (>= 0); the sign comes from the command. Cleared by the watchdog,
+    // operator takeover, or the client switching back to Auto.
+    ModbusCommand modbus_cmd         = ModbusCommand::Auto;
+    int32_t  modbus_cmd_power_w      = 0;
 
     // True while a Modbus client is the most recent source of truth.
     bool     modbus_active           = false;

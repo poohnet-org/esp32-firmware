@@ -681,6 +681,9 @@ function SbseControllerChart({samples}: SbseControllerChartProps) {
 
 type ControllerConfig = API.getType["sbse_controller/config"];
 
+// Conventional Modbus unit id per emulated protocol (index = modbus_server_protocol).
+const MODBUS_DEFAULT_UNIT_ID = [3, 247];
+
 export class SbseController extends ConfigComponent<"sbse_controller/config",
                                                     {status_ref?: RefObject<SbseControllerStatus>}> {
     constructor() {
@@ -852,6 +855,28 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                         <Switch desc={__("sbse_controller.content.modbus_server_enabled_desc")}
                                 checked={state.modbus_server_enabled}
                                 onClick={this.toggle("modbus_server_enabled")}/>
+                    </FormRow>
+
+                    <FormRow label={__("sbse_controller.content.modbus_server_protocol")}
+                             help={__("sbse_controller.content.modbus_server_protocol_help")}>
+                        <InputSelect
+                            items={[
+                                ["0", __("sbse_controller.content.modbus_server_protocol_sma")],
+                                ["1", __("sbse_controller.content.modbus_server_protocol_goodwe")],
+                            ]}
+                            value={`${state.modbus_server_protocol}`}
+                            onValue={(v) => {
+                                const protocol = parseInt(v, 10);
+                                // Let the unit id follow the protocol's convention
+                                // unless the operator picked a custom one.
+                                const old_default = MODBUS_DEFAULT_UNIT_ID[state.modbus_server_protocol];
+                                this.setState({
+                                    modbus_server_protocol: protocol,
+                                    modbus_server_unit_id: state.modbus_server_unit_id === old_default
+                                        ? MODBUS_DEFAULT_UNIT_ID[protocol]
+                                        : state.modbus_server_unit_id,
+                                });
+                            }}/>
                     </FormRow>
 
                     <FormRow label={__("sbse_controller.content.modbus_server_port")}

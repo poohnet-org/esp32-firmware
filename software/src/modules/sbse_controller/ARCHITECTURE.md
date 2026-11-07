@@ -16,13 +16,17 @@ A self-contained ESP32 firmware module that:
    (with `lo == hi` collapsing to single-target chase).
 3. Exposes its full surface (state, config, commands) over **HTTP, MQTT
    and the built-in dashboard** under identical semantics.
-4. Optionally listens for **SMA-compatible Modbus TCP writes** so an
-   external controller (e.g. a WARP charger configured for "SMA Hybrid
-   Inverter") can steer it.
+4. Optionally runs a **Modbus TCP server that emulates an inverter** so an
+   external controller can steer it: an SMA hybrid inverter (e.g. a WARP
+   charger configured for "SMA Hybrid Inverter", evcc `sma-hybrid`) or,
+   once implemented, a GoodWe hybrid inverter (e.g. the Tibber app).
+   Exactly one protocol is active at a time (`modbus_server_protocol`).
 
-SBSE-only by design: the register map (addresses, byte order, the
-asymmetric setpoint window, the 41433 import floor, etc.) is
-hard-coded. Other inverters would need a different module.
+The *upstream* side is SBSE-only by design: the register map the controller
+reads and writes on the real inverter (addresses, byte order, the
+asymmetric setpoint window, the 41433 import floor, etc.) is hard-coded.
+Other inverters would need a different module. The emulated protocol on
+the server side is independent of that.
 
 ## File layout
 
@@ -36,7 +40,7 @@ src/modules/sbse_controller/
   sbse_controller.h         class declaration + helper-class members
   sbse_controller.cpp       module skeleton + SMA OpMod semantics
   sbse_control_loop.cpp     tick pipeline + register map
-  sbse_modbus_server.{h,cpp}  SMA-compatible Modbus server (protocol)
+  sbse_modbus_server.{h,cpp}  inverter-emulating Modbus server (protocol)
   sbse_modbus_proxy.{h,cpp}   SMA-hybrid read-side register cache
   sbse_trace_history.{h,cpp}  5-min 1 Hz ring buffer (HTTP endpoint)
 
@@ -120,31 +124,33 @@ using ReadHandler     = std::function<TFModbusTCPExceptionCode(TFModbusTCPFuncti
                                                                uint16_t *out_regs)>;
 
 void set_handlers(OpModHandler, SetpointHandler, ReadHandler);
-void configure(bool enabled, uint16_t port, uint8_t unit_id);
-bool needs_restart_for(bool new_enabled, uint16_t new_port) const;
+void configure(bool enabled, uint16_t port, uint8_t unit_id, SbseModbusProtocol protocol);
+bool needs_restart_for(bool new_enabled, uint16_t new_port, SbseModbusProtocol new_protocol) const;
 void start();   void stop();   void restart();
 ```
 
-- Pure protocol adapter. Accepts WriteMultipleRegisters at `40236`
+- Pure protocol adapter. In SMA mode it accepts WriteMultipleRegisters at `40236`
   (length 2) and any even-aligned 2/4/6/8/10-register sub-block within
   `40793..40802`; plus ReadHoldingRegisters / ReadInputRegisters at any
   address (delegated wholesale to `on_read`). Anything else →
-  `IllegalFunction` / `IllegalDataAddress`.
+  `IllegalFunction` / `IllegalDataAddress`. In GoodWe mode it currently
+  rejects every request (`IllegalDataAddress`) until the GoodWe adapter
+  exists.
 - Knows nothing about `active_config`, force-mode, the watchdog, or
   the SMA OpMod *values* (it just hands the raw uint32 to the handler).
 - Owns the underlying `TFModbusTCPServer`, its 20 ms tick task, and
-  the most-recent (enabled, port) pair for `needs_restart_for()`.
+  the most-recent (enabled, port, protocol) tuple for `needs_restart_for()`.
 
 The controller wires the handlers in `register_events()`:
 
 ```cpp
 modbus_server.set_handlers(
-    [this](uint32_t op_mod) { return this->on_modbus_op_mod_write(op_mod); },
+    [this](uint32_t op_mod) { return this->on_sma_op_mod_write(op_mod); },
     [this](uint16_t addr, uint16_t count, const uint16_t *regs) {
-        return this->on_modbus_setpoint_write(addr, count, regs);
+        return this->on_sma_setpoint_write(addr, count, regs);
     },
     [this](TFModbusTCPFunctionCode fc, uint16_t addr, uint16_t count, uint16_t *out) {
-        return this->on_modbus_read(fc, addr, count, out);
+        return this->on_sma_read(fc, addr, count, out);
     });
 ```
 
@@ -221,8 +227,8 @@ flowchart TD
     RS --> EMA
     subgraph COMPUTE ["compute_and_write()"]
         direction TB
-        EMA["grid EMA: ema ← α_grid·raw + (1−α_grid)·ema<br/>d_ema = Δema"] --> FM{"force mode?<br/>(SMA OpMod 2289/2290)"}
-        FM -- "yes" --> FORCE["raw_setpoint = modbus_force_w<br/>(P + D bypassed)"]
+        EMA["grid EMA: ema ← α_grid·raw + (1−α_grid)·ema<br/>d_ema = Δema"] --> FM{"force mode?<br/>(modbus_cmd ≠ Auto)"}
+        FM -- "yes" --> FORCE["raw_setpoint = ∓modbus_cmd_power_w<br/>(P + D bypassed)"]
         FM -- "no" --> PID["natural_grid = ema + battery_w (= load − PV)<br/>target = clamp(natural_grid, lo, hi)<br/>raw_setpoint = battery_w + Kp·(ema − target) + Kd·d_ema<br/>direction lock per regime"]
         FORCE --> CLAMP
         PID --> CLAMP["clamps: SoC edges (0 % / 100 %),<br/>[−max_charge_w … +max_discharge_w],<br/>output EMA (α_setpoint) → target_w"]
@@ -269,8 +275,8 @@ compute_and_write()
  │  lo = grid_charge_target_w   # primary target
  │  hi = grid_discharge_target_w  # discharge rescue threshold
  │
- │  if modbus_force_w != 0:                  # OpMod 2289 / 2290
- │     raw_setpoint = modbus_force_w         # (P + D bypassed)
+ │  if modbus_cmd != Auto:                   # force_charge / force_discharge
+ │     raw_setpoint = modbus_force_setpoint_w()   # ∓power, P + D bypassed
  │  else:                                    # P + implicit-I + D, regime-aware
  │     natural_grid = ema_grid + battery_w_raw   # grid if battery=0 (= load − PV)
  │     target       = clamp(natural_grid, lo, hi)
@@ -369,7 +375,8 @@ orthogonal to that derived signal.
 | `active_config` | `SbseController::active_config` | HTTP/MQTT/dashboard `active_config_update`, **plus** internal mutations from `apply_modbus_setpoint_block` (the Modbus-driven path bypasses the command handler to avoid clearing its own force-mode state) |
 | Cached fast-path mirrors (`kp`, `kd`, `max_*`, `grid_charge_target_w`, `grid_discharge_target_w`, `alpha_*`, `deadband_w`) | `SbseController` members | `apply_runtime_from_active()` after any `active_config` change |
 | `state` (read-only) | `SbseController::state` | One updater per field, scattered across the cycle. Auto-publishes via the API event bus. |
-| `modbus_op_mod`, `modbus_force_w`, `modbus_active`, `last_modbus_write_us` | `SbseController` members | Modbus dispatch handlers + operator-takeover paths |
+| `modbus_cmd`, `modbus_cmd_power_w`, `modbus_active`, `last_modbus_write_us` (protocol-neutral) | `SbseController` members | `set_modbus_command()` from the protocol adapters; `clear_modbus_command()` on operator takeover / watchdog / protocol switch |
+| `sma_op_mod` (SMA adapter latch) | `SbseController` member | `on_sma_op_mod_write()`; reset by `clear_modbus_command()` |
 | Modbus server (listener, dispatch state) | `SbseModbusServer` | `configure()` / `start()` / `stop()` from controller |
 | Trace ring buffer | `SbseTraceHistory` | `add_sample()` from control loop |
 
@@ -382,7 +389,7 @@ well-defined set of callers.
 
 "**Last write wins**" across all four. The active_config command handler
 is the operator-takeover path: any write through it (HTTP, MQTT, the
-dashboard's Apply buttons) clears `modbus_force_w` / `modbus_active`
+dashboard's Apply buttons) clears the Modbus command / `modbus_active`
 explicitly. Modbus dispatch mutates `active_config` *directly* (via
 `Config::updateXxx`, which auto-publishes the event but skips the
 command handler) so that its own state isn't immediately stomped.

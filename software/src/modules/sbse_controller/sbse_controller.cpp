@@ -38,8 +38,9 @@
 static constexpr micros_t PAUSE_DURATION             = 30_s;
 
 // ---------------------------------------------------------------------------
-// SMA OpMod values latched into modbus_op_mod and consulted from the setpoint
-// dispatch handler. The wire-level protocol (register addresses + lengths,
+// SMA OpMod values latched into sma_op_mod and consulted from the setpoint
+// dispatch handler, which translates them into the protocol-neutral
+// ModbusCommand. The wire-level protocol (register addresses + lengths,
 // listener lifecycle) lives in SbseModbusServer; the SBSE register map (grid
 // power, battery power, SoC, setpoint write) lives in sbse_control_loop.cpp.
 //
@@ -51,6 +52,16 @@ static constexpr micros_t PAUSE_DURATION             = 30_s;
 static constexpr uint16_t SMA_OPMOD_DEFAULT           = 2424;
 static constexpr uint16_t SMA_OPMOD_FORCE_CHARGE      = 2289;
 static constexpr uint16_t SMA_OPMOD_FORCE_DISCHARGE   = 2290;
+
+static const char *modbus_command_name(SbseController::ModbusCommand cmd)
+{
+    switch (cmd) {
+        case SbseController::ModbusCommand::Auto:           return "auto";
+        case SbseController::ModbusCommand::ForceCharge:    return "force_charge";
+        case SbseController::ModbusCommand::ForceDischarge: return "force_discharge";
+        default:                                            return "auto";
+    }
+}
 
 // ---------------------------------------------------------------------------
 
@@ -98,9 +109,13 @@ void SbseController::pre_setup()
         // non-zero setpoint). Live-tunable; mirror in active_config below.
         {"keepalive_interval_s", Config::Uint(480, 0, 1800)},  // 0 disables; default 8 min
         {"keepalive_pulse_w",    Config::Uint(50, 0, 500)},    // pulse magnitude in W
-        // SMA-compatible Modbus TCP server. All four fields are init-only:
+        // Inverter-emulating Modbus TCP server. These fields are init-only:
         // changing them stops/starts the server but doesn't touch active_config.
         {"modbus_server_enabled",     Config::Bool(false)},
+        // Emulated inverter: 0 = SMA hybrid inverter [default], 1 = GoodWe
+        // hybrid inverter. Exactly one protocol is served at a time; see
+        // SbseModbusProtocol in sbse_modbus_server.h.
+        {"modbus_server_protocol",    Config::Uint(0, 0, 1)},
         {"modbus_server_port",        Config::Uint16(502)},
         {"modbus_server_unit_id",     Config::Uint(3, 0, 247)},   // 0 = accept any
         {"modbus_server_watchdog_s",  Config::Uint(60, 0, 3600)},  // 0 disables
@@ -168,7 +183,12 @@ void SbseController::pre_setup()
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
         {"modbus_active",     Config::Bool(false)},
+        // Protocol-neutral command from the Modbus client:
+        // "auto" | "force_charge" | "force_discharge".
+        {"modbus_cmd",        Config::Str("auto", 0, 16)},
+        // Last SMA OpMod received (SMA protocol only; stays 2424 in GoodWe mode).
         {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
+        // Signed force setpoint (negative = charge, 0 when modbus_cmd is "auto").
         {"modbus_force_w",    Config::Int32(0)},
         // Bumped on every Modbus read (FC 3 / FC 4) served by the proxy
         // cache. The dashboard watches this for state changes to drive its
@@ -201,7 +221,13 @@ void SbseController::load_init_only_from_config()
     host = config.get("host")->asString();
     port = static_cast<uint16_t>(config.get("port")->asUint());
 
+    load_modbus_server_config();
+}
+
+void SbseController::load_modbus_server_config()
+{
     modbus_server_enabled       = config.get("modbus_server_enabled")->asBool();
+    modbus_server_protocol      = static_cast<SbseModbusProtocol>(config.get("modbus_server_protocol")->asUint());
     modbus_server_port          = config.get("modbus_server_port")->asUint16();
     modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
     modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
@@ -276,19 +302,23 @@ void SbseController::register_urls()
         apply_runtime_from_active();
 
         // Refresh Modbus server config. Bounce the listener only if the
-        // bind-time fields (enabled / port) actually changed; the rest
-        // (unit_id, watchdog, authority) are consulted live and don't
+        // bind-time fields (enabled / port / protocol) actually changed; the
+        // rest (unit_id, watchdog, authority) are consulted live and don't
         // require a restart.
-        modbus_server_enabled       = config.get("modbus_server_enabled")->asBool();
-        modbus_server_port          = config.get("modbus_server_port")->asUint16();
-        modbus_server_unit_id       = static_cast<uint8_t>(config.get("modbus_server_unit_id")->asUint());
-        modbus_server_watchdog_ms   = config.get("modbus_server_watchdog_s")->asUint() * 1000u;
-        modbus_server_authority     = static_cast<ModbusAuthority>(config.get("modbus_server_authority")->asUint());
-        if (modbus_server.needs_restart_for(modbus_server_enabled, modbus_server_port)) {
-            modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
+        const SbseModbusProtocol previous_protocol = modbus_server_protocol;
+        load_modbus_server_config();
+        const bool needs_restart = modbus_server.needs_restart_for(modbus_server_enabled,
+                                                                   modbus_server_port,
+                                                                   modbus_server_protocol);
+        modbus_server.configure(modbus_server_enabled, modbus_server_port,
+                                modbus_server_unit_id, modbus_server_protocol);
+        if (needs_restart) {
             modbus_server.restart();
-        } else {
-            modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
+        }
+        // A command latched by the old protocol's client must not outlive
+        // the switch -- that client can no longer reach us to release it.
+        if (modbus_server_protocol != previous_protocol) {
+            revert_modbus_overrides();
         }
     }, false);
 
@@ -298,19 +328,15 @@ void SbseController::register_urls()
     api.addState("sbse_controller/active_config", &active_config);
     api.addCommand("sbse_controller/active_config_update", &active_config, {},
                    [this](Language /*language*/, String &/*errmsg*/) {
-        apply_runtime_from_active();
         // Operator (dashboard / HTTP / MQTT) takeover -- release any Modbus
         // force-mode setpoint so the P controller is back in charge of
-        // hitting the new target.
-        if (modbus_force_w != 0 || modbus_active) {
+        // hitting the new target. Cleared before apply_runtime_from_active()
+        // so the refreshed mode pill no longer shows force_*.
+        if (modbus_cmd != ModbusCommand::Auto || modbus_active) {
             logger.printfln("operator override -- releasing Modbus force-mode setpoint");
         }
-        modbus_force_w = 0;
-        modbus_op_mod  = SMA_OPMOD_DEFAULT;
-        modbus_active  = false;
-        state.get("modbus_active")->updateBool(false);
-        state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
-        state.get("modbus_force_w")->updateInt(0);
+        clear_modbus_command();
+        apply_runtime_from_active();
     }, false);
 
     api.addState("sbse_controller/state", &state);
@@ -325,12 +351,7 @@ void SbseController::register_urls()
         paused       = true;
         paused_until = now_us() + PAUSE_DURATION;
         // Operator takeover: drop any Modbus force-mode state too.
-        modbus_force_w = 0;
-        modbus_op_mod  = SMA_OPMOD_DEFAULT;
-        modbus_active  = false;
-        state.get("modbus_active")->updateBool(false);
-        state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
-        state.get("modbus_force_w")->updateInt(0);
+        clear_modbus_command();
         send_zero_w();
         publish_mode(Mode::Paused);
         logger.printfln("pause: holding setpoint loop at 0 W for %lld s",
@@ -358,12 +379,7 @@ void SbseController::register_urls()
         // first post-resume cycle to re-assert the setpoint block.
         last_written_wsptmin   = INT32_MIN;
         // Operator takeover. (Idempotent if already cleared by pause.)
-        modbus_force_w = 0;
-        modbus_op_mod  = SMA_OPMOD_DEFAULT;
-        modbus_active  = false;
-        state.get("modbus_active")->updateBool(false);
-        state.get("modbus_op_mod")->updateUint(SMA_OPMOD_DEFAULT);
-        state.get("modbus_force_w")->updateInt(0);
+        clear_modbus_command();
 
         // Publish a plausible mode immediately so the dashboard doesn't sit on
         // "paused" until the next tick fires. The tick will correct it if
@@ -396,20 +412,21 @@ void SbseController::register_events()
         this->tick();
     }, tick_ms, tick_ms);
 
-    // Wire the SMA Modbus server's protocol-adapter callbacks once, then
+    // Wire the Modbus server's SMA protocol-adapter callbacks once, then
     // start if enabled.
     modbus_server.set_handlers(
         [this](uint32_t op_mod) {
-            return this->on_modbus_op_mod_write(op_mod);
+            return this->on_sma_op_mod_write(op_mod);
         },
         [this](uint16_t start_address, uint16_t reg_count, const uint16_t *regs) {
-            return this->on_modbus_setpoint_write(start_address, reg_count, regs);
+            return this->on_sma_setpoint_write(start_address, reg_count, regs);
         },
         [this](TFModbusTCPFunctionCode fc, uint16_t start_address,
                uint16_t reg_count, uint16_t *out_regs) {
-            return this->on_modbus_read(fc, start_address, reg_count, out_regs);
+            return this->on_sma_read(fc, start_address, reg_count, out_regs);
         });
-    modbus_server.configure(modbus_server_enabled, modbus_server_port, modbus_server_unit_id);
+    modbus_server.configure(modbus_server_enabled, modbus_server_port,
+                            modbus_server_unit_id, modbus_server_protocol);
     if (modbus_server_enabled) {
         modbus_server.start();
     }
@@ -454,15 +471,16 @@ void SbseController::apply_enabled()
 }
 
 // ---------------------------------------------------------------------------
-// SMA Modbus server handlers
+// SMA protocol adapter
 //
 // These are the protocol-layer callbacks SbseModbusServer invokes on each
-// accepted WriteMultipleRegisters. The server has already validated the
-// unit-id filter and the address/length tuple; here we carry the semantic
-// state (sticky OpMod, force-mode, active_config wiring, watchdog timer).
+// accepted SMA request. The server has already validated the unit-id filter
+// and the address/length tuple; here we translate the SMA wire format
+// (sticky OpMod, setpoint block) into the protocol-neutral ModbusCommand and
+// the active_config changes the authority level allows.
 // ---------------------------------------------------------------------------
 
-TFModbusTCPExceptionCode SbseController::on_modbus_op_mod_write(uint32_t op_mod)
+TFModbusTCPExceptionCode SbseController::on_sma_op_mod_write(uint32_t op_mod)
 {
     // 40236: CmpBMS.OpMod (U32BE). Latch for the next 40793 write. We accept
     // the three documented SMA values (2289/2290/2424); anything else is
@@ -471,17 +489,17 @@ TFModbusTCPExceptionCode SbseController::on_modbus_op_mod_write(uint32_t op_mod)
     if (op_mod == SMA_OPMOD_FORCE_CHARGE
         || op_mod == SMA_OPMOD_FORCE_DISCHARGE
         || op_mod == SMA_OPMOD_DEFAULT) {
-        modbus_op_mod = static_cast<uint16_t>(op_mod);
+        sma_op_mod = static_cast<uint16_t>(op_mod);
     } else {
-        modbus_op_mod = SMA_OPMOD_DEFAULT;
+        sma_op_mod = SMA_OPMOD_DEFAULT;
     }
-    state.get("modbus_op_mod")->updateUint(modbus_op_mod);
+    state.get("modbus_op_mod")->updateUint(sma_op_mod);
     ++modbus_write_count;
     state.get("modbus_write_count")->updateUint(modbus_write_count);
     return TFModbusTCPExceptionCode::Success;
 }
 
-TFModbusTCPExceptionCode SbseController::on_modbus_setpoint_write(
+TFModbusTCPExceptionCode SbseController::on_sma_setpoint_write(
     uint16_t start_address, uint16_t reg_count, const uint16_t *regs)
 {
     // Setpoint sub-block at 40793..40802 (each field is U32BE = 2 regs).
@@ -490,15 +508,15 @@ TFModbusTCPExceptionCode SbseController::on_modbus_setpoint_write(
     // within the 10-register window. We only act on the fields actually
     // present in this write; absent fields keep their previous active_config
     // values (matches evcc's piecemeal write pattern).
-    apply_modbus_setpoint_partial(start_address, reg_count, regs);
+    apply_sma_setpoint_partial(start_address, reg_count, regs);
     ++modbus_write_count;
     state.get("modbus_write_count")->updateUint(modbus_write_count);
     return TFModbusTCPExceptionCode::Success;
 }
 
-void SbseController::apply_modbus_setpoint_partial(uint16_t start_address,
-                                                   uint16_t reg_count,
-                                                   const uint16_t *regs)
+void SbseController::apply_sma_setpoint_partial(uint16_t start_address,
+                                                uint16_t reg_count,
+                                                const uint16_t *regs)
 {
     // SMA setpoint field indices within the 5x uint32 block at 40793:
     //   0 = BatChaMinW    (ignored -- controller has no minimum-charge cap)
@@ -539,15 +557,23 @@ void SbseController::apply_modbus_setpoint_partial(uint16_t start_address,
     // target. If a partial write didn't include the relevant max field, fall
     // back to the controller's current cached cap so a single OpMod write
     // immediately following GridWSpt still picks a sensible force value.
-    if (modbus_op_mod == SMA_OPMOD_FORCE_CHARGE) {
-        const int32_t mag = has_cha_max ? static_cast<int32_t>(cha_max_clamped) : max_charge_w;
-        modbus_force_w = -mag;
-    } else if (modbus_op_mod == SMA_OPMOD_FORCE_DISCHARGE) {
-        const int32_t mag = has_dchg_max ? static_cast<int32_t>(dchg_max_clamped) : max_discharge_w;
-        modbus_force_w =  mag;
-    } else {
-        modbus_force_w = 0;
+    ModbusCommand cmd   = ModbusCommand::Auto;
+    int32_t       power = 0;
+    if (sma_op_mod == SMA_OPMOD_FORCE_CHARGE) {
+        cmd   = ModbusCommand::ForceCharge;
+        power = has_cha_max ? static_cast<int32_t>(cha_max_clamped) : max_charge_w;
+    } else if (sma_op_mod == SMA_OPMOD_FORCE_DISCHARGE) {
+        cmd   = ModbusCommand::ForceDischarge;
+        power = has_dchg_max ? static_cast<int32_t>(dchg_max_clamped) : max_discharge_w;
     }
+    // A force request at 0 W has always meant "P controller" on the SMA
+    // path (the old signed force value used 0 as "no force"); keep that.
+    if (power == 0) {
+        cmd = ModbusCommand::Auto;
+    }
+    // Set before apply_runtime_from_active() below so its mode-pill refresh
+    // already sees the new command.
+    set_modbus_command(cmd, power);
 
     // Mutate active_config in place per the configured authority level.
     // Direct mutation auto-publishes via the API event bus (so MQTT /
@@ -581,14 +607,9 @@ void SbseController::apply_modbus_setpoint_partial(uint16_t start_address,
     if (dirty_active_config) {
         apply_runtime_from_active();
     }
-
-    last_modbus_write_us = now_us();
-    modbus_active        = true;
-    state.get("modbus_active") ->updateBool(true);
-    state.get("modbus_force_w")->updateInt (modbus_force_w);
 }
 
-TFModbusTCPExceptionCode SbseController::on_modbus_read(
+TFModbusTCPExceptionCode SbseController::on_sma_read(
     TFModbusTCPFunctionCode fc, uint16_t start_address,
     uint16_t reg_count, uint16_t *out_regs)
 {
@@ -612,21 +633,57 @@ TFModbusTCPExceptionCode SbseController::on_modbus_read(
     return rc;
 }
 
+// ---------------------------------------------------------------------------
+// Protocol-neutral Modbus command handling
+//
+// Shared by every protocol adapter. Nothing below knows about SMA OpMod
+// values or register addresses.
+// ---------------------------------------------------------------------------
+
+void SbseController::set_modbus_command(ModbusCommand cmd, int32_t power_w)
+{
+    modbus_cmd           = cmd;
+    modbus_cmd_power_w   = cmd == ModbusCommand::Auto ? 0 : std::max(power_w, int32_t{0});
+    last_modbus_write_us = now_us();
+    modbus_active        = true;
+    state.get("modbus_active") ->updateBool(true);
+    state.get("modbus_cmd")    ->updateString(modbus_command_name(modbus_cmd));
+    state.get("modbus_force_w")->updateInt(modbus_force_setpoint_w());
+}
+
+void SbseController::clear_modbus_command()
+{
+    modbus_cmd           = ModbusCommand::Auto;
+    modbus_cmd_power_w   = 0;
+    sma_op_mod           = SMA_OPMOD_DEFAULT;
+    modbus_active        = false;
+    last_modbus_write_us = -1_us;
+    state.get("modbus_active") ->updateBool(false);
+    state.get("modbus_cmd")    ->updateString(modbus_command_name(ModbusCommand::Auto));
+    state.get("modbus_op_mod") ->updateUint(SMA_OPMOD_DEFAULT);
+    state.get("modbus_force_w")->updateInt(0);
+}
+
+int32_t SbseController::modbus_force_setpoint_w() const
+{
+    switch (modbus_cmd) {
+        case ModbusCommand::ForceCharge:    return -modbus_cmd_power_w;
+        case ModbusCommand::ForceDischarge: return  modbus_cmd_power_w;
+        case ModbusCommand::Auto:           return 0;
+        default:                            return 0;
+    }
+}
+
 void SbseController::revert_modbus_overrides()
 {
     // Restore the live-tunable subset from the persistent config and clear
     // every Modbus-driven runtime field. Called by the watchdog when no
-    // Modbus traffic has arrived within the configured timeout.
+    // Modbus traffic has arrived within the configured timeout, and when the
+    // emulated protocol is switched. The command is cleared first so the
+    // mode pill refreshed by apply_runtime_from_active() is already correct.
+    clear_modbus_command();
     copy_live_tunable_to_active();
     apply_runtime_from_active();
-
-    modbus_force_w = 0;
-    modbus_op_mod  = SMA_OPMOD_DEFAULT;
-    modbus_active  = false;
-    last_modbus_write_us = -1_us;
-    state.get("modbus_active") ->updateBool(false);
-    state.get("modbus_op_mod") ->updateUint(SMA_OPMOD_DEFAULT);
-    state.get("modbus_force_w")->updateInt (0);
 }
 
 void SbseController::watchdog_tick()

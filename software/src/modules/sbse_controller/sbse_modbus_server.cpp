@@ -41,6 +41,15 @@ static constexpr uint16_t SRV_SETP_REG_COUNT_MAX = 10;
 // 20 ms is plenty for a device that sees <1 write/s in normal use.
 static constexpr millis_t SRV_TICK            = 20_ms;
 
+const char *sbse_modbus_protocol_name(SbseModbusProtocol protocol)
+{
+    switch (protocol) {
+        case SbseModbusProtocol::Sma:    return "sma";
+        case SbseModbusProtocol::Goodwe: return "goodwe";
+        default:                         return "unknown";
+    }
+}
+
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Weffc++"
@@ -61,16 +70,21 @@ void SbseModbusServer::set_handlers(OpModHandler on_op_mod_,
     on_read     = std::move(on_read_);
 }
 
-void SbseModbusServer::configure(bool enabled_, uint16_t port_, uint8_t unit_id_)
+void SbseModbusServer::configure(bool enabled_, uint16_t port_, uint8_t unit_id_,
+                                 SbseModbusProtocol protocol_)
 {
-    enabled = enabled_;
-    port    = port_;
-    unit_id = unit_id_;
+    enabled  = enabled_;
+    port     = port_;
+    unit_id  = unit_id_;
+    protocol = protocol_;
 }
 
-bool SbseModbusServer::needs_restart_for(bool new_enabled, uint16_t new_port) const
+bool SbseModbusServer::needs_restart_for(bool new_enabled, uint16_t new_port,
+                                         SbseModbusProtocol new_protocol) const
 {
-    return new_enabled != last_started_enabled || new_port != last_started_port;
+    return new_enabled  != last_started_enabled
+        || new_port     != last_started_port
+        || new_protocol != last_started_protocol;
 }
 
 void SbseModbusServer::start()
@@ -110,16 +124,21 @@ void SbseModbusServer::start()
         return;
     }
 
-    running              = true;
-    last_started_enabled = enabled;
-    last_started_port    = port;
+    running               = true;
+    last_started_enabled  = enabled;
+    last_started_port     = port;
+    last_started_protocol = protocol;
 
     tick_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
         server.tick();
     }, SRV_TICK, SRV_TICK);
 
-    logger.printfln("listening on port %u, unit_id=%u",
-                    port, static_cast<unsigned>(unit_id));
+    logger.printfln("listening on port %u, unit_id=%u, protocol=%s",
+                    port, static_cast<unsigned>(unit_id),
+                    sbse_modbus_protocol_name(protocol));
+    if (protocol == SbseModbusProtocol::Goodwe) {
+        logger.printfln("GoodWe emulation not implemented yet -- all requests are rejected");
+    }
 }
 
 void SbseModbusServer::stop()
@@ -153,6 +172,12 @@ TFModbusTCPExceptionCode SbseModbusServer::dispatch(
 {
     // Unit ID filter: 0 in our config means "accept any unit id".
     if (unit_id != 0 && req_unit_id != unit_id) {
+        return TFModbusTCPExceptionCode::IllegalDataAddress;
+    }
+
+    // GoodWe register map not implemented yet: reject everything rather than
+    // answering with the SMA map under a GoodWe unit id.
+    if (protocol == SbseModbusProtocol::Goodwe) {
         return TFModbusTCPExceptionCode::IllegalDataAddress;
     }
 

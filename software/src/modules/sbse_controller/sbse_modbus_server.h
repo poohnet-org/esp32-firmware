@@ -25,9 +25,19 @@
 #include <TFModbusTCPServer.h>
 #include "TFModbusTCPCommon.h"
 
-// SMA-compatible Modbus TCP server. Thin protocol adapter: accepts a small
-// set of SMA register block requests and forwards them to handlers provided
-// by the controller. All semantics (sticky OpMod, force-mode, watchdog,
+// Which inverter the Modbus TCP server emulates. Exactly one protocol is
+// active at a time (config.modbus_server_protocol); the numeric values are
+// the persisted config values.
+enum class SbseModbusProtocol : uint8_t {
+    Sma    = 0,   // SMA hybrid inverter (CmpBMS.OpMod + setpoint block)
+    Goodwe = 1,   // GoodWe hybrid inverter -- adapter not implemented yet
+};
+
+[[gnu::const]] const char *sbse_modbus_protocol_name(SbseModbusProtocol protocol);
+
+// Inverter-emulating Modbus TCP server. Thin protocol adapter: in SMA mode
+// it accepts a small set of SMA register block requests and forwards them
+// to handlers provided by the controller. All semantics (sticky OpMod, force-mode, watchdog,
 // active_config wiring, register cache) live in the controller; this class
 // only owns the network listener and the dispatch.
 //
@@ -49,6 +59,10 @@
 // addresses the proxy cache doesn't cover).
 //
 // Anything else returns IllegalFunction or IllegalDataAddress.
+//
+// GoodWe mode: the GoodWe register map isn't implemented yet, so every
+// request is rejected with IllegalDataAddress. The listener still runs so a
+// client can connect, and the protocol switch is in place for the adapter.
 class SbseModbusServer final
 {
 public:
@@ -75,12 +89,13 @@ public:
     // Snapshot the controller's persistent config into the server. unit_id 0
     // means "accept any unit id" (broadcast-style). Doesn't itself bind --
     // call start() / restart() afterwards.
-    void configure(bool enabled, uint16_t port, uint8_t unit_id);
+    void configure(bool enabled, uint16_t port, uint8_t unit_id, SbseModbusProtocol protocol);
 
-    // Has the (enabled, port) tuple changed since the most recent start()?
-    // Used by the controller to decide whether to bounce the listener after
-    // a /config PUT.
-    bool needs_restart_for(bool new_enabled, uint16_t new_port) const;
+    // Has the (enabled, port, protocol) tuple changed since the most recent
+    // start()? Used by the controller to decide whether to bounce the
+    // listener after a /config PUT. A protocol switch restarts the listener
+    // so connected clients of the old protocol are dropped.
+    bool needs_restart_for(bool new_enabled, uint16_t new_port, SbseModbusProtocol new_protocol) const;
 
     void start();
     void stop();
@@ -104,11 +119,14 @@ private:
     bool     enabled         = false;
     uint16_t port            = 502;
     uint8_t  unit_id         = 3;
+    SbseModbusProtocol protocol = SbseModbusProtocol::Sma;
 
-    // Snapshot of (enabled, port) at the moment of the most recent start();
-    // needs_restart_for() compares against this to skip no-op restarts.
-    bool     last_started_enabled = false;
-    uint16_t last_started_port    = 0;
+    // Snapshot of (enabled, port, protocol) at the moment of the most recent
+    // start(); needs_restart_for() compares against this to skip no-op
+    // restarts.
+    bool     last_started_enabled  = false;
+    uint16_t last_started_port     = 0;
+    SbseModbusProtocol last_started_protocol = SbseModbusProtocol::Sma;
 
     OpModHandler    on_op_mod;
     SetpointHandler on_setpoint;
