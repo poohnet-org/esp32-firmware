@@ -38,10 +38,10 @@ identical semantics:
 | `tick_ms` | `300` | ms, 50…5000 | Control loop period. One read-compute-write cycle per tick. Lower = faster grid tracking but more Modbus traffic. |
 | `soc_interval_ms` | `1000` | ms, ≥ `tick_ms`, ≤ 60000 | How often to poll battery SoC. SoC changes slowly; polling every tick wastes bandwidth. |
 | `modbus_server_enabled` | `false` | bool | Enable the inverter-emulating Modbus TCP server (see [Modbus TCP server](#modbus-tcp-server-external-control) below). Requires a reboot to take effect. |
-| `modbus_server_protocol` | `0` (= SMA) | uint8, 0…1 | Which inverter the server emulates: `0` = SMA hybrid inverter, `1` = GoodWe hybrid inverter. Exactly one protocol is served at a time. **GoodWe is not implemented yet**: in that mode the server accepts connections but rejects every request with `IllegalDataAddress`. A change restarts the listener and reverts any Modbus overrides (same as a watchdog expiry). The dashboard moves the unit ID between the protocol defaults (`3` / `247`) unless a custom one is set. |
+| `modbus_server_protocol` | `0` (= SMA) | uint8, 0…2 | Which inverter the server emulates: `0` = SMA hybrid inverter, `1` = GoodWe ET hybrid inverter (see [GoodWe protocol](#goodwe-protocol-modbus_server_protocol--1)), `2` = Solis S5/S6 hybrid inverter (see [Solis protocol](#solis-protocol-modbus_server_protocol--2)). Exactly one protocol is served at a time. A change restarts the listener and reverts any Modbus overrides (same as a watchdog expiry). The dashboard moves the unit ID between the protocol defaults (`3` / `247` / `1`) unless a custom one is set. |
 | `modbus_server_port` | `502` | uint16 | Port the server listens on. Requires a reboot to take effect. |
-| `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `3` is the SMA convention, `247` the GoodWe one. `0` means "accept any". Live-tunable (no reboot needed). |
-| `modbus_server_watchdog_s` | `60` | seconds, 0…3600 | Watchdog timeout. If no Modbus write arrives within this many seconds, the controller reverts the live overrides to the persistent config and exits force-mode. `0` disables the watchdog. Live-tunable. |
+| `modbus_server_unit_id` | `3` | uint8, 0…247 | Unit ID this server responds to. `3` is the SMA convention, `247` the GoodWe one, `1` the Solis one. `0` means "accept any". Live-tunable (no reboot needed). |
+| `modbus_server_watchdog_s` | `60` | seconds, 0…3600 | Watchdog timeout. If no Modbus write (GoodWe / Solis: no request at all, reads included) arrives within this many seconds, the controller reverts the live overrides to the persistent config and exits force-mode. `0` disables the watchdog. Live-tunable. |
 | `modbus_server_authority` | `1` (= caps) | uint8, 0…2 | How much of the operator's `active_config` an external Modbus client is allowed to overwrite on every WriteMultipleRegisters at register 40793. Live-tunable. See [Modbus authority](#modbus-authority-modbus_server_authority) below for the per-value behaviour table. |
 
 ## Live-tunable fields (in both `config` and `active_config`)
@@ -76,7 +76,8 @@ identical semantics:
 | `write_err_count` | uint32 | Lifetime counter of failed setpoint writes. |
 | `read_fail_streak` | uint32 | Current run of consecutive failed read cycles; resets on the next successful cycle. |
 | `modbus_active` | bool | `true` if a Modbus TCP server write has been applied within the watchdog window. Used by the dashboard's `MB` badge and by external clients that want to verify their command was received. |
-| `modbus_cmd` | string | Protocol-neutral command from the Modbus client: `auto` (P controller in charge), `force_charge` or `force_discharge`. Every protocol adapter translates into this. |
+| `modbus_cmd` | string | Protocol-neutral command from the Modbus client: `auto` (P controller in charge), `force_charge` or `force_discharge`; GoodWe additionally `idle` (battery held at 0 W), `no_discharge` / `no_charge` (P controller with one direction blocked) and `grid_target` (P controller chasing the client's grid target). Every protocol adapter translates into this. |
+| `modbus_grid_target_w` | int32 | Grid target set by the client while `modbus_cmd` is `grid_target` (GoodWe buy/sell power), else `0`. Positive = import. |
 | `modbus_op_mod` | uint16 | SMA protocol only: last `OpMod` value received (`2424` = Default, `2289` = Force charge, `2290` = Force discharge). Stays `2424` in GoodWe mode. |
 | `modbus_force_w` | int32 | Battery power currently being commanded under force-mode (`0` when `modbus_cmd` is `auto`). Negative = charging, positive = discharging. |
 | `last_error` | string | Last error message produced by a read or write. |
@@ -125,7 +126,7 @@ When `config.modbus_server_enabled = true`, the controller listens on `config.mo
 
 Each protocol adapter translates its wire format into one protocol-neutral command (`state.modbus_cmd`: `auto` / `force_charge` / `force_discharge` plus a power), and into the `active_config` changes that `modbus_server_authority` allows. Watchdog, authority and arbitration below apply to every protocol.
 
-The rest of this section describes the **SMA** protocol (`modbus_server_protocol = 0`): it accepts the **same WriteMultipleRegisters traffic that the WARP charger's "SMA Hybrid Inverter" battery class sends to a real Sunny Boy Storage**. The GoodWe protocol (`1`) is not implemented yet.
+The following subsections up to [Proxy register cache](#proxy-register-cache) describe the **SMA** protocol (`modbus_server_protocol = 0`): it accepts the **same WriteMultipleRegisters traffic that the WARP charger's "SMA Hybrid Inverter" battery class sends to a real Sunny Boy Storage**. The GoodWe protocol (`1`) has its own section [below](#goodwe-protocol-modbus_server_protocol--1).
 
 ### Accepted registers
 
@@ -250,6 +251,70 @@ c.close()
 ```
 
 To release: write `OpMod = 2424` then `40793` with all-zeros (or non-zero `BatChaMaxW` / `BatDchgMaxW` for normal P-controller operation under those caps), or just send any `active_config` change from the dashboard.
+
+### GoodWe protocol (`modbus_server_protocol = 1`)
+
+Emulates a GoodWe ET hybrid inverter on unit ID `247` (set `modbus_server_unit_id` accordingly; the dashboard does this when you switch). Intended for clients that only support GoodWe, such as the Tibber app via the Tibber Bridge; evcc's `goodwe-hybrid` template and the `goodwe` Python library speak the same map. The register layout follows the Tinkerforge GoodWe meter table, evcc's template and the `goodwe` library (`et.py`); the code is in `sbse_goodwe_map.{h,cpp}`.
+
+**Request logging.** Every distinct request shape (unit ID, function code, start, count, result) is logged once per listener start (`goodwe: unit 247 Read Holding Registers 35000+33 -> Success`), and every write is logged with its values. Requests to another unit ID are logged too (and rejected). The first session with a new client therefore shows exactly what it reads and writes. FC 6 writes show up as "Write Multiple Registers" with count 1, because the Modbus library delivers them that way.
+
+**Readable windows** (FC 3 and FC 4 alike). A read must lie entirely inside one window; anything else answers `IllegalDataAddress`, which is how real GoodWe firmware reports an unsupported block (the `goodwe` library probes optional blocks that way). Registers inside a window that aren't modelled read `0`.
+
+| Window | Content | Served values |
+|---|---|---|
+| `35000..35059` | device info | `35001` rated power (from the SBSE, fallback 5000 W), `35002` = 1 (3-phase), `35003` serial `SBSEETU<uid>…` (16 chars; "ETU" makes the `goodwe` library pick the ET family), `35011` model `GW5K-ET` etc., `35016..35020` firmware versions, `35021` / `35027` firmware strings `SBSE-EMU-1.0` |
+| `35100..35224` | runtime data | `35100` timestamp (local time, once NTP synced); `35105` PV1 power (SMA `DcMs.Watt[0]`, string 1 only); `35136` grid mode = 1; `35137` inverter power = PV + battery (S32); `35139` active power (S32, export positive); `35171` load = PV + battery + grid import (S32, ≥ 0); `35182` battery power (S32, discharge positive); `35184` battery mode (1 standby, 2 discharge, 3 charge); `35187` work mode = 1; `35191` PV total, `35195` / `35200` grid export / import, `35206` / `35209` battery charge / discharge (U32, 0.1 kWh) |
+| `36000..36124` | external meter | `36003` / `36004` meter status OK; `36008` total power (S16) and `36025` (S32), export positive; `36013` power factor 1.000; `36015` / `36017` export / import (float32, Wh); `36043` meter type 3P4W; `36104` / `36120` export / import (U64, 0.01 kWh) |
+| `37000..37023` | BMS | `37007` SoC, `37008` SoH = 100 |
+| `45000..47999` | settings | whatever the client wrote (shadow table, 32 entries), `47511` defaults to `1` (auto), everything else to `0` |
+
+Unknown values: energy counters the SMA proxy cache doesn't have read as the NaN pattern (`0xFFFFFFFF` / all ones / float NaN), as evcc expects. On the reference installation the grid-meter energy counters (`30581` / `30583`) and the battery charge counter aren't available, so `35195` / `35200` / `35206` and the meter energies are NaN. Phase values, voltages, currents, frequency, temperatures and the BMS current limits read `0`.
+
+**Writes** (FC 6 or FC 16) are accepted only inside `45000..47999` and stored in the shadow, so a client can read back what it wrote; everything else answers `IllegalDataAddress`. Only EMS mode (`47511`) and EMS power (`47512`, "Xset", W) have an effect. After a write to either, the pair is applied 200 ms later, so it doesn't matter in which order a client writes them. EMS mode `7` (off-grid) and values outside `1..12` are rejected with `IllegalDataValue`.
+
+| EMS mode (`47511`) | Xset > 0 | Xset = 0 | Notes |
+|---|---|---|---|
+| `1` auto | `auto` | `auto` | |
+| `2` charge PV | `force_charge` Xset | `no_discharge` | GoodWe charges Xset **plus** PV; here the battery charges at Xset. Xset 0 = "PV only", approximated by the P controller charging from surplus only. evcc uses this mode for "hold" (Xset 0) and "charge" (Xset = max charge power). |
+| `3` discharge PV | `force_discharge` Xset | `idle` | |
+| `4` import AC | `force_charge` Xset | `no_discharge` | |
+| `5` export AC | `force_discharge` Xset | `idle` | |
+| `6` conserve | `no_discharge` | `no_discharge` | |
+| `7` off-grid | rejected | rejected | |
+| `8` battery standby | `idle` | `idle` | |
+| `9` buy power | `grid_target` +Xset | `grid_target` 0 | needs `modbus_server_authority = 2` (full), else `auto`; target clamped to `-750..2500` W like the configurable grid targets |
+| `10` sell power | `grid_target` −Xset | `grid_target` 0 | as `9` |
+| `11` charge battery | `force_charge` Xset | `idle` | |
+| `12` discharge battery | `force_discharge` Xset | `idle` | |
+
+Force powers are clamped by `max_charge_w` / `max_discharge_w` in the control loop, as in SMA mode. The GoodWe protocol never changes `active_config`, so `modbus_server_authority` only matters for modes `9` / `10`. The mode pill shows `idle` as *blocked*, `no_discharge` / `no_charge` as *block discharge* / *block charge*.
+
+**Watchdog.** A real GoodWe keeps its EMS mode until told otherwise, and evcc / Tibber only write when they change it. So in GoodWe mode **every request, reads included,** keeps the command alive; the watchdog reverts to `auto` (and `47511` back to `1`) only after the client has stopped polling for `modbus_server_watchdog_s`. Operator takeover (dashboard Apply, `pause`) also resets `47511` / `47512`.
+
+**Keep-alive** pulses run in `auto`, `no_discharge`, `no_charge` and `grid_target` (never in a blocked direction), but not in `force_*` / `idle`.
+
+### Solis protocol (`modbus_server_protocol = 2`)
+
+Emulates a Solis S5/S6 hybrid inverter (Solis "ESINV-33000ID" hybrid protocol) on unit ID `1`. Intended for the Tibber app's Solis integration (Tibber asks for a Solis S5/S6 with an S2-WL-ST datalogger). Unlike the GoodWe search, the Tibber Bridge's Solis search scans TCP port 502 and identifies the device over Modbus: it reads input register `35000` (inverter type) and `33004+15` (serial number) on unit 1. Layout sources: the Pho3niX90/solis_modbus Home Assistant integration and evcc's `solis-hybrid` / `solis-hybrid-s` templates; the code is in `sbse_solis_map.{h,cpp}`. Request logging works as for GoodWe.
+
+**Readable windows** (FC 3 and FC 4 alike; anything outside answers `IllegalDataAddress`; unmodelled registers inside a window read `0`; Solis has no NaN convention, so unknown values read `0` too):
+
+| Window | Content | Served values |
+|---|---|---|
+| `33000..33299` | live data | `33000` model = `0x0340`, `33003` protocol version 3, `33004..33019` serial `SBSE<uid>…` (ASCII, 2 chars per register), `33022..33027` clock; `33029` PV total (U32 kWh); `33057` PV power (string 1); `33079` / `33151` inverter power = PV + battery; `33095` status 3 (generating); `33130` / `33263` meter power (S32, export positive); `33132` mirror of `43110`; `33135` battery direction (0 charge, 1 discharge); `33139` SoC; `33140` SoH 100; `33143` / `33144` BMS current limits 100.0 A (the SBSE doesn't expose them; non-limiting value); `33147` household load; `33149` battery power (S32, **positive = charging**, matching both evcc templates); `33165` battery discharge total (U32 kWh); `33281` power factor 1.00 |
+| `34500..34509` | remote-dispatch capability | all `0`: `34502 ≠ 0xAA55`, so remote dispatch (`44100+`) is not offered |
+| `35000..35009` | inverter type | `35000 = 0x0340`: protocol 3, model code `0x40` = 1-phase HV hybrid (S5-EH1P class, the SBSE's topology). `0x80` would be the S6 1-phase HV hybrid. |
+| `43000..43999`, `44000..44299` | settings | shadow table (160 entries) of what the client wrote; `43000..43005` = live clock. Defaults: `43007` = 190 (on), `43024` reserve SoC 10, `43110` = 1 (self-use), `43117` / `43118` max currents 100.0 A, `43282` RC timeout 5 min, all else `0` |
+
+**Writes** (FC 6 / FC 16) are accepted in both settings windows and stored. Only the remote-control registers have an effect, applied 200 ms after the last write to any of them:
+
+| `43135` (RC force) | Power register | Command |
+|---|---|---|
+| `0` none | -- | `auto` |
+| `1` force charge | `43136` × 10 W | `force_charge` (`idle` at 0 W) |
+| `2` force discharge | `43129` × 10 W | `force_discharge` (`idle` at 0 W) |
+
+Values > 2 are rejected with `IllegalDataValue`. As on the real inverter, a force command lapses back to `auto` (and `43135` to `0`) unless the client re-writes it within `43282` minutes (default 5). Storage mode (`43110`), time-of-use slots and the remote-dispatch block are stored and logged but **not interpreted yet**: the event log shows whether Tibber uses them, and they can be mapped once that's known. Watchdog and operator takeover work as for GoodWe (any request keeps the command alive; takeover resets `43135`).
 
 ## Grid targets
 
@@ -397,11 +462,12 @@ each tick (default 300 ms, gated by `enabled` + connection + `paused`):
   ema_grid       ← α_grid · measured_grid  + (1 − α_grid) · ema_grid
   d_ema_grid     = ema_grid − previous_ema_grid    (0 on the first cycle)
 
-  lo = grid_charge_target_w
-  hi = grid_discharge_target_w           ── validator: hi >= lo
+  lo = grid_charge_target_w              ── modbus_cmd grid_target:
+  hi = grid_discharge_target_w           ── lo = hi = modbus_grid_target_w
+                                         ── validator: hi >= lo
 
-  if modbus_cmd != auto:                           ── force_charge / force_discharge
-    raw_setpoint = ∓modbus_cmd_power_w             ── (P+D bypassed)
+  if modbus_cmd in (force_charge, force_discharge, idle):
+    raw_setpoint = ∓modbus_cmd_power_w             ── (0 for idle; P+D bypassed)
   else:                                            ── P + implicit-I + D, regime-aware
     natural_grid = ema_grid + battery_now          ── grid if battery=0; = load − PV
     target       = clamp(natural_grid, lo, hi)     ── hi above the deadzone,

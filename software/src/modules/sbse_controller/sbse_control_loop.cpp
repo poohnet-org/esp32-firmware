@@ -466,11 +466,20 @@ void SbseController::compute_and_write()
     //       stays "discharging" and the setpoint doesn't slam to 0 (the
     //       prior implementation's bug).
     float raw_setpoint;
-    if (modbus_cmd != ModbusCommand::Auto) {
+    //
+    //    Modbus commands: force charge / discharge / idle replace the chase
+    //    with a fixed setpoint; grid_target swaps the operator's [lo, hi]
+    //    for the client's single target; no_discharge / no_charge run the
+    //    chase and then block one direction.
+    const int32_t eff_lo_w = modbus_cmd == ModbusCommand::GridTarget ? modbus_grid_target_w
+                                                                     : grid_charge_target_w;
+    const int32_t eff_hi_w = modbus_cmd == ModbusCommand::GridTarget ? modbus_grid_target_w
+                                                                     : grid_discharge_target_w;
+    if (modbus_cmd_is_fixed()) {
         raw_setpoint = static_cast<float>(modbus_force_setpoint_w());
     } else {
-        const float lo_f          = static_cast<float>(grid_charge_target_w);
-        const float hi_f          = static_cast<float>(grid_discharge_target_w);
+        const float lo_f          = static_cast<float>(eff_lo_w);
+        const float hi_f          = static_cast<float>(eff_hi_w);
         const float natural_grid  = ema_grid_w + static_cast<float>(battery_w_raw);
         const float target_w_f    = std::clamp(natural_grid, lo_f, hi_f);
         const float delta_w       = ema_grid_w - target_w_f;
@@ -487,6 +496,9 @@ void SbseController::compute_and_write()
         // Kp=1, so no clamp is needed there.
         if (natural_grid > hi_f && raw_setpoint < 0.0f) raw_setpoint = 0.0f;
         if (natural_grid < lo_f && raw_setpoint > 0.0f) raw_setpoint = 0.0f;
+
+        if (modbus_cmd == ModbusCommand::NoDischarge && raw_setpoint > 0.0f) raw_setpoint = 0.0f;
+        if (modbus_cmd == ModbusCommand::NoCharge    && raw_setpoint < 0.0f) raw_setpoint = 0.0f;
     }
 
     // 3) SoC limits (only when we have a usable reading).
@@ -526,7 +538,7 @@ void SbseController::compute_and_write()
     state.get("battery_soc")->updateUint(soc_pct);
 
     trace_history.add_sample(lroundf(ema_grid_w), battery_w_raw, last_written_w,
-                             grid_charge_target_w, grid_discharge_target_w);
+                             eff_lo_w, eff_hi_w);
 
     // 7) Keep-alive heartbeat. Track how long the battery has been idle, and
     //    when the controller is about to fall into the "write 0 W again"
@@ -559,14 +571,14 @@ void SbseController::compute_and_write()
         // in between the two ticks (force-mode write, etc.). If force-mode
         // is active, its setpoint is already in target_w from the chase
         // block above and the keep-alive event is silently abandoned.
-        if (modbus_cmd == ModbusCommand::Auto) {
+        if (!modbus_cmd_is_fixed()) {
             keepalive_return = true;
             target_w         = 0;
             ema_setpoint_w   = 0.0f;
         }
     } else if (keepalive_interval_s > 0
                && target_w == 0
-               && modbus_cmd == ModbusCommand::Auto
+               && !modbus_cmd_is_fixed()
                && battery_idle_since_us != -1_us
                && deadline_elapsed(battery_idle_since_us
                                    + micros_t{static_cast<int64_t>(keepalive_interval_s) * 1000000LL})) {
@@ -667,8 +679,10 @@ int32_t SbseController::pick_keepalive_pulse()
 
     const int32_t pulse_d = std::min(mag, max_discharge_w);
     const int32_t pulse_c = std::min(mag, max_charge_w);
-    const bool can_discharge = pulse_d > 0 && (soc_pct == 255 || soc_pct > 0);
-    const bool can_charge    = pulse_c > 0 && (soc_pct == 255 || soc_pct < 100);
+    const bool can_discharge = pulse_d > 0 && (soc_pct == 255 || soc_pct > 0)
+                            && modbus_cmd != ModbusCommand::NoDischarge;
+    const bool can_charge    = pulse_c > 0 && (soc_pct == 255 || soc_pct < 100)
+                            && modbus_cmd != ModbusCommand::NoCharge;
 
     if (!can_discharge && !can_charge) {
         return 0;
@@ -927,6 +941,16 @@ SbseController::Mode SbseController::current_running_mode() const
     }
     if (modbus_cmd == ModbusCommand::ForceDischarge) {
         return Mode::ForceDischarge;
+    }
+    // GoodWe idle / no_discharge / no_charge reuse the block-* pills.
+    if (modbus_cmd == ModbusCommand::Idle) {
+        return Mode::Blocked;
+    }
+    if (modbus_cmd == ModbusCommand::NoDischarge) {
+        return Mode::BlockDischarge;
+    }
+    if (modbus_cmd == ModbusCommand::NoCharge) {
+        return Mode::BlockCharge;
     }
     // The block-* modes are derived from the saturation limits regardless of
     // source: Modbus, dashboard, MQTT and HTTP all surface the same way.

@@ -30,7 +30,8 @@
 // the persisted config values.
 enum class SbseModbusProtocol : uint8_t {
     Sma    = 0,   // SMA hybrid inverter (CmpBMS.OpMod + setpoint block)
-    Goodwe = 1,   // GoodWe hybrid inverter -- adapter not implemented yet
+    Goodwe = 1,   // GoodWe ET hybrid inverter (EMS mode + power, sbse_goodwe_map.h)
+    Solis  = 2,   // Solis S5/S6 hybrid inverter (remote control, sbse_solis_map.h)
 };
 
 [[gnu::const]] const char *sbse_modbus_protocol_name(SbseModbusProtocol protocol);
@@ -60,9 +61,15 @@ enum class SbseModbusProtocol : uint8_t {
 //
 // Anything else returns IllegalFunction or IllegalDataAddress.
 //
-// GoodWe mode: the GoodWe register map isn't implemented yet, so every
-// request is rejected with IllegalDataAddress. The listener still runs so a
-// client can connect, and the protocol switch is in place for the adapter.
+// GoodWe and Solis ("register map" protocols): every FC 3 / FC 4 read goes
+// to the map read handler and every write (FC 16, and FC 6 -- the library
+// delivers FC 6 as a one-register WriteMultipleRegisters) to the map write
+// handler; the controller dispatches on the protocol. Address validation
+// lives in the maps (sbse_goodwe_map.h, sbse_solis_map.h). Each distinct
+// request shape
+// (unit, function code, start, count, result) is logged once per listener
+// start, so the event log shows what a new client (e.g. the Tibber Bridge)
+// actually reads and writes without flooding on every poll.
 class SbseModbusServer final
 {
 public:
@@ -77,6 +84,10 @@ public:
                                                                    uint16_t reg_count,
                                                                    uint16_t *out_regs)>;
 
+    using WriteHandler    = std::function<TFModbusTCPExceptionCode(uint16_t start_address,
+                                                                   uint16_t reg_count,
+                                                                   const uint16_t *regs)>;
+
     SbseModbusServer();
     SbseModbusServer(const SbseModbusServer &) = delete;
     SbseModbusServer &operator=(const SbseModbusServer &) = delete;
@@ -85,6 +96,10 @@ public:
     void set_handlers(OpModHandler on_op_mod,
                       SetpointHandler on_setpoint,
                       ReadHandler on_read);
+
+    // Register-map protocol (GoodWe, Solis) callbacks. Must be called
+    // before start().
+    void set_map_handlers(ReadHandler on_read, WriteHandler on_write);
 
     // Snapshot the controller's persistent config into the server. unit_id 0
     // means "accept any unit id" (broadcast-style). Doesn't itself bind --
@@ -108,6 +123,13 @@ private:
                                       uint16_t start_address,
                                       uint16_t data_count,
                                       void *data);
+    TFModbusTCPExceptionCode dispatch_map(TFModbusTCPFunctionCode function_code,
+                                             uint16_t start_address,
+                                             uint16_t data_count,
+                                             void *data);
+    void log_request_once(uint8_t req_unit_id, TFModbusTCPFunctionCode function_code,
+                          uint16_t start_address, uint16_t data_count,
+                          TFModbusTCPExceptionCode result);
 
     TFModbusTCPServer server{TFModbusTCPByteOrder::Host};
     bool     running         = false;
@@ -131,4 +153,20 @@ private:
     OpModHandler    on_op_mod;
     SetpointHandler on_setpoint;
     ReadHandler     on_read;
+
+    ReadHandler     on_map_read;
+    WriteHandler    on_map_write;
+
+    // Request shapes already logged since the last start() (map protocols).
+    struct SeenRequest {
+        uint16_t start_address;
+        uint16_t data_count;
+        uint8_t  unit_id;
+        uint8_t  function_code;
+        uint8_t  result;
+    };
+    static constexpr size_t SEEN_REQUESTS_MAX = 48;
+    SeenRequest seen_requests[SEEN_REQUESTS_MAX] = {};
+    size_t      seen_request_count = 0;
+    bool        seen_requests_overflow_logged = false;
 };

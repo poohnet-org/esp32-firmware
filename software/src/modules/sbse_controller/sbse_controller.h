@@ -28,8 +28,10 @@
 #include "config.h"
 #include "module.h"
 #include "modules/network_lib/generic_tcp_client_pool_connector.h"
+#include "sbse_goodwe_map.h"
 #include "sbse_modbus_proxy.h"
 #include "sbse_modbus_server.h"
+#include "sbse_solis_map.h"
 #include "sbse_trace_history.h"
 
 #if defined(__GNUC__)
@@ -61,13 +63,18 @@ public:
     };
 
     // Protocol-neutral command from the external Modbus client. Each
-    // protocol adapter (SMA OpMod + setpoint block, later GoodWe EMS mode +
-    // power) translates its wire format into this; the control loop only
-    // ever looks at the neutral form.
+    // protocol adapter (SMA OpMod + setpoint block, GoodWe EMS mode + power)
+    // translates its wire format into this; the control loop only ever looks
+    // at the neutral form. SMA only produces Auto / ForceCharge /
+    // ForceDischarge.
     enum class ModbusCommand : uint8_t {
         Auto           = 0,   // P controller in charge (under whatever caps are set)
         ForceCharge    = 1,   // charge at modbus_cmd_power_w, P + D bypassed
         ForceDischarge = 2,   // discharge at modbus_cmd_power_w, P + D bypassed
+        Idle           = 3,   // battery held at 0 W, P + D bypassed
+        NoDischarge    = 4,   // P controller, but never discharge (charge from surplus only)
+        NoCharge       = 5,   // P controller, but never charge
+        GridTarget     = 6,   // P controller chasing modbus_grid_target_w (hard mode)
     };
 
     enum class Mode : uint8_t {
@@ -130,12 +137,47 @@ private:
                                     uint16_t reg_count,
                                     const uint16_t *regs);
 
+    // GoodWe protocol adapter: register reads from sbse_goodwe_map, writes
+    // into the settings shadow; EMS mode (47511) + power (47512) are
+    // translated into the neutral ModbusCommand after a short debounce, so
+    // the order in which a client writes the two registers doesn't matter.
+    TFModbusTCPExceptionCode on_goodwe_read(TFModbusTCPFunctionCode fc,
+                                            uint16_t start_address,
+                                            uint16_t reg_count,
+                                            uint16_t *out_regs);
+    TFModbusTCPExceptionCode on_goodwe_write(uint16_t start_address,
+                                             uint16_t reg_count,
+                                             const uint16_t *regs);
+    void apply_goodwe_ems();
+    void fill_goodwe_live(SbseGoodwe::Live *live);
+
+    // Solis protocol adapter: same pattern. The remote-control registers
+    // (43135 force mode, 43136 / 43129 power, 43282 timeout) are translated
+    // after the debounce; the RC timeout expires like on the real inverter.
+    TFModbusTCPExceptionCode on_solis_read(TFModbusTCPFunctionCode fc,
+                                           uint16_t start_address,
+                                           uint16_t reg_count,
+                                           uint16_t *out_regs);
+    TFModbusTCPExceptionCode on_solis_write(uint16_t start_address,
+                                            uint16_t reg_count,
+                                            const uint16_t *regs);
+    void apply_solis_rc();
+    void fill_solis_live(SbseSolis::Live *live);
+    void solis_rc_timeout_tick();
+
+    // Shared by the register-map adapters (GoodWe, Solis).
+    void note_map_traffic();                  // watchdog liveness on any request
+    void log_map_write(uint16_t start_address, uint16_t reg_count, const uint16_t *regs);
+    void schedule_map_apply();                // (re)arm the debounced command apply
+    void build_emulated_serial(const char *prefix, char *buf);   // 16 chars + NUL
+
     // Protocol-neutral Modbus command handling.
     void set_modbus_command(ModbusCommand cmd, int32_t power_w);  // + mark client active
     void clear_modbus_command();         // back to Auto, client inactive (no active_config change)
     void revert_modbus_overrides();      // watchdog expiry: clear + restore active_config
     void watchdog_tick();
-    int32_t modbus_force_setpoint_w() const;  // signed force setpoint, 0 when Auto
+    int32_t modbus_force_setpoint_w() const;  // signed force setpoint, 0 unless forcing
+    bool modbus_cmd_is_fixed() const;         // fixed battery setpoint (P + D bypassed)?
     void load_modbus_server_config();    // mirror config.modbus_server_* into the cached fields
 
     // Proxy register cache for the SMA-hybrid read set. Polled on its own
@@ -149,6 +191,7 @@ private:
     void publish_setpoint(int32_t watts);
     void publish_mode(Mode mode);
     Mode current_running_mode() const;
+    void refresh_running_mode();               // re-publish the pill if in a running-family mode
 
     // Reconfiguration helpers
     void load_init_only_from_config();         // init-only fields (host, port, tick_ms, ...)
@@ -218,6 +261,18 @@ private:
     // operator takeover, or the client switching back to Auto.
     ModbusCommand modbus_cmd         = ModbusCommand::Auto;
     int32_t  modbus_cmd_power_w      = 0;
+    int32_t  modbus_grid_target_w    = 0;   // GridTarget only; positive = import
+
+    // Register-map adapter state. Settings shadows (whatever a client writes
+    // into the protocol's settings window; GoodWe EMS mode / power, Solis
+    // remote control), the pending debounced command apply, the emulated
+    // serial numbers, and the Solis RC timeout.
+    SbseGoodwe::Settings goodwe_settings{SbseGoodwe::settings_default};
+    SbseSolis::Settings  solis_settings{SbseSolis::settings_default};
+    uint64_t map_apply_task_id       = 0;
+    char     goodwe_serial[17]       = {};
+    char     solis_serial[17]        = {};
+    micros_t solis_rc_deadline_us    = -1_us;
 
     // True while a Modbus client is the most recent source of truth.
     bool     modbus_active           = false;

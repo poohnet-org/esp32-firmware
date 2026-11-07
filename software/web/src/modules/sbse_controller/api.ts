@@ -17,7 +17,7 @@ export interface config {
     keepalive_interval_s: number;
     keepalive_pulse_w: number;
     modbus_server_enabled: boolean;
-    modbus_server_protocol: number;    // 0=SMA, 1=GoodWe
+    modbus_server_protocol: number;    // 0=SMA, 1=GoodWe, 2=Solis
     modbus_server_port: number;
     modbus_server_unit_id: number;
     modbus_server_watchdog_s: number;
@@ -51,7 +51,8 @@ export interface state {
     write_err_count: number;
     read_fail_streak: number;
     modbus_active: boolean;
-    modbus_cmd: string;                // "auto" | "force_charge" | "force_discharge"
+    modbus_cmd: string;                // "auto" | "force_charge" | "force_discharge" | "idle" | "no_discharge" | "no_charge" | "grid_target"
+    modbus_grid_target_w: number;      // grid target from the client ("grid_target" only), + = import
     modbus_op_mod: number;             // SMA protocol only
     modbus_force_w: number;
     modbus_read_count: number;

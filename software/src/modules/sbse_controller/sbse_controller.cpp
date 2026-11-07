@@ -22,6 +22,7 @@
 #include "sbse_controller.h"
 
 #include <algorithm>
+#include <time.h>
 
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
@@ -59,6 +60,10 @@ static const char *modbus_command_name(SbseController::ModbusCommand cmd)
         case SbseController::ModbusCommand::Auto:           return "auto";
         case SbseController::ModbusCommand::ForceCharge:    return "force_charge";
         case SbseController::ModbusCommand::ForceDischarge: return "force_discharge";
+        case SbseController::ModbusCommand::Idle:           return "idle";
+        case SbseController::ModbusCommand::NoDischarge:    return "no_discharge";
+        case SbseController::ModbusCommand::NoCharge:       return "no_charge";
+        case SbseController::ModbusCommand::GridTarget:     return "grid_target";
         default:                                            return "auto";
     }
 }
@@ -113,9 +118,10 @@ void SbseController::pre_setup()
         // changing them stops/starts the server but doesn't touch active_config.
         {"modbus_server_enabled",     Config::Bool(false)},
         // Emulated inverter: 0 = SMA hybrid inverter [default], 1 = GoodWe
-        // hybrid inverter. Exactly one protocol is served at a time; see
-        // SbseModbusProtocol in sbse_modbus_server.h.
-        {"modbus_server_protocol",    Config::Uint(0, 0, 1)},
+        // ET hybrid inverter, 2 = Solis S5/S6 hybrid inverter. Exactly one
+        // protocol is served at a time; see SbseModbusProtocol in
+        // sbse_modbus_server.h.
+        {"modbus_server_protocol",    Config::Uint(0, 0, 2)},
         {"modbus_server_port",        Config::Uint16(502)},
         {"modbus_server_unit_id",     Config::Uint(3, 0, 247)},   // 0 = accept any
         {"modbus_server_watchdog_s",  Config::Uint(60, 0, 3600)},  // 0 disables
@@ -183,9 +189,13 @@ void SbseController::pre_setup()
         {"write_err_count",   Config::Uint32(0)},
         {"read_fail_streak",  Config::Uint32(0)},
         {"modbus_active",     Config::Bool(false)},
-        // Protocol-neutral command from the Modbus client:
-        // "auto" | "force_charge" | "force_discharge".
+        // Protocol-neutral command from the Modbus client: "auto" |
+        // "force_charge" | "force_discharge" | "idle" | "no_discharge" |
+        // "no_charge" | "grid_target" (the last four: GoodWe only).
         {"modbus_cmd",        Config::Str("auto", 0, 16)},
+        // Grid target commanded by the client (modbus_cmd "grid_target"
+        // only, else 0). Positive = import.
+        {"modbus_grid_target_w", Config::Int32(0)},
         // Last SMA OpMod received (SMA protocol only; stays 2424 in GoodWe mode).
         {"modbus_op_mod",     Config::Uint16(SMA_OPMOD_DEFAULT)},
         // Signed force setpoint (negative = charge, 0 when modbus_cmd is "auto").
@@ -268,12 +278,18 @@ void SbseController::apply_runtime_from_active()
     safety_zero_after_failures = active_config.get("safety_zero_after_failures")->asUint();
     keepalive_interval_s = active_config.get("keepalive_interval_s")->asUint();
     keepalive_pulse_w    = static_cast<int32_t>(active_config.get("keepalive_pulse_w")->asUint());
-    // Mode pill is derived from the saturation caps + modbus force state, so
-    // a cap change from dashboard / HTTP / MQTT / Modbus may flip the running
-    // family (running <-> block_charge <-> block_discharge <-> blocked or the
-    // force_* variants). Refresh the published mode immediately when we're
-    // already in a running-family state -- don't touch it when paused /
-    // stale / disabled / safety / faulted, where the cycle owns the badge.
+    refresh_running_mode();
+}
+
+void SbseController::refresh_running_mode()
+{
+    // Mode pill is derived from the saturation caps + modbus command, so a
+    // cap change from dashboard / HTTP / MQTT / Modbus or a new Modbus
+    // command may flip the running family (running <-> block_charge <->
+    // block_discharge <-> blocked or the force_* variants). Refresh the
+    // published mode immediately when we're already in a running-family
+    // state -- don't touch it when paused / stale / disabled / safety /
+    // faulted, where the cycle owns the badge.
     const String &mode = state.get("mode")->asString();
     if (mode == "running"
         || mode == "blocked"
@@ -425,6 +441,18 @@ void SbseController::register_events()
                uint16_t reg_count, uint16_t *out_regs) {
             return this->on_sma_read(fc, start_address, reg_count, out_regs);
         });
+    modbus_server.set_map_handlers(
+        [this](TFModbusTCPFunctionCode fc, uint16_t start_address,
+               uint16_t reg_count, uint16_t *out_regs) {
+            return modbus_server_protocol == SbseModbusProtocol::Solis
+                 ? this->on_solis_read(fc, start_address, reg_count, out_regs)
+                 : this->on_goodwe_read(fc, start_address, reg_count, out_regs);
+        },
+        [this](uint16_t start_address, uint16_t reg_count, const uint16_t *regs) {
+            return modbus_server_protocol == SbseModbusProtocol::Solis
+                 ? this->on_solis_write(start_address, reg_count, regs)
+                 : this->on_goodwe_write(start_address, reg_count, regs);
+        });
     modbus_server.configure(modbus_server_enabled, modbus_server_port,
                             modbus_server_unit_id, modbus_server_protocol);
     if (modbus_server_enabled) {
@@ -450,6 +478,10 @@ void SbseController::pre_reboot()
     if (modbus_proxy_task_id != 0) {
         task_scheduler.cancel(modbus_proxy_task_id);
         modbus_proxy_task_id = 0;
+    }
+    if (map_apply_task_id != 0) {
+        task_scheduler.cancel(map_apply_task_id);
+        map_apply_task_id = 0;
     }
 
     modbus_server.stop();
@@ -634,6 +666,370 @@ TFModbusTCPExceptionCode SbseController::on_sma_read(
 }
 
 // ---------------------------------------------------------------------------
+// GoodWe protocol adapter
+//
+// Reads are answered from the GoodWe register map (sbse_goodwe_map.cpp) fed
+// with the controller's live values and the SMA proxy cache. Writes land in
+// the settings shadow; EMS mode / power are translated into the neutral
+// ModbusCommand by apply_goodwe_ems(). Every write is logged with its
+// values -- writes are rare, and they are what we need to see from a new
+// client.
+// ---------------------------------------------------------------------------
+
+// Debounce between a command-register write and applying it: evcc writes
+// GoodWe mode then power, the goodwe library mode then (optionally) power,
+// Solis clients 43135 then the power then the timeout; other clients may use
+// another order. A real inverter applies each register on its own; we wait
+// so an intermediate (new mode, old power) pair never reaches the loop.
+static constexpr millis_t MAP_APPLY_DEBOUNCE = 200_ms;
+
+void SbseController::note_map_traffic()
+{
+    // A real GoodWe / Solis keeps its mode until told otherwise, and their
+    // clients only write on a change. So in these modes any request --
+    // reads included -- counts as "client still there" for the watchdog;
+    // it fires once the client stops polling altogether.
+    if (modbus_active) {
+        last_modbus_write_us = now_us();
+    }
+}
+
+void SbseController::log_map_write(uint16_t start_address, uint16_t reg_count,
+                                   const uint16_t *regs)
+{
+    char values[64];
+    size_t used = 0;
+    values[0] = '\0';
+    for (uint16_t i = 0; i < reg_count && i < 8 && used < sizeof(values); ++i) {
+        used += static_cast<size_t>(snprintf(values + used, sizeof(values) - used,
+                                             i == 0 ? "%u" : " %u", regs[i]));
+    }
+    logger.printfln("%s write %u+%u: %s%s", sbse_modbus_protocol_name(modbus_server_protocol),
+                    start_address, reg_count, values, reg_count > 8 ? " ..." : "");
+}
+
+void SbseController::schedule_map_apply()
+{
+    if (map_apply_task_id != 0) {
+        task_scheduler.cancel(map_apply_task_id);
+    }
+    map_apply_task_id = task_scheduler.scheduleOnce([this]() {
+        map_apply_task_id = 0;
+        if (modbus_server_protocol == SbseModbusProtocol::Solis) {
+            this->apply_solis_rc();
+        } else if (modbus_server_protocol == SbseModbusProtocol::Goodwe) {
+            this->apply_goodwe_ems();
+        }
+    }, MAP_APPLY_DEBOUNCE);
+}
+
+void SbseController::build_emulated_serial(const char *prefix, char *buf)
+{
+    // prefix + the ESP32 Brick UID, '0'-padded to 16 characters.
+    const String &uid = esp32_common.get_uid_str();
+    size_t n = 0;
+    for (size_t i = 0; prefix[i] != '\0' && n < 16; ++i) buf[n++] = prefix[i];
+    for (size_t i = 0; i < uid.length() && n < 16; ++i) buf[n++] = uid[i];
+    while (n < 16) buf[n++] = '0';
+    buf[16] = '\0';
+}
+
+void SbseController::fill_goodwe_live(SbseGoodwe::Live *live)
+{
+    if (goodwe_serial[0] == '\0') {
+        // "ETU": the goodwe library picks the ET family by serial substring.
+        build_emulated_serial("SBSEETU", goodwe_serial);
+    }
+
+    const uint32_t rated_w = inverter_rated_w > 0 ? static_cast<uint32_t>(inverter_rated_w) : 5000u;
+    // e.g. "GW5K-ET", "GW3.6K-ET". The register map truncates to 10 chars.
+    static char model[32];
+    if (rated_w % 1000u == 0) {
+        snprintf(model, sizeof(model), "GW%luK-ET", rated_w / 1000u);
+    } else {
+        snprintf(model, sizeof(model), "GW%lu.%luK-ET", rated_w / 1000u, (rated_w % 1000u) / 100u);
+    }
+
+    uint64_t v;
+    live->grid_w    = grid_w_raw;
+    live->battery_w = battery_w_raw;
+    live->soc_pct   = soc_pct;
+    live->pv_w      = modbus_proxy.get_cached(30773, 2, &v) ? static_cast<int32_t>(v) : -1;   // DcMs.Watt[0]
+    live->rated_w   = rated_w;
+    live->pv_total_wh      = modbus_proxy.get_cached(30513, 4, &v) ? v : UINT64_MAX;  // Metering.TotWhOut
+    live->grid_import_wh   = modbus_proxy.get_cached(30581, 2, &v) ? v : UINT64_MAX;  // GridMs.TotWhIn
+    live->grid_export_wh   = modbus_proxy.get_cached(30583, 2, &v) ? v : UINT64_MAX;  // GridMs.TotWhOut
+    live->bat_charge_wh    = UINT64_MAX;                                               // not polled
+    live->bat_discharge_wh = modbus_proxy.get_cached(31401, 4, &v) ? v : UINT64_MAX;  // CmpBMS.GetBatDschWh
+    live->serial = goodwe_serial;
+    live->model  = model;
+
+    const time_t now = time(nullptr);
+    struct tm tm_now;
+    live->time_valid = now > 1700000000 && localtime_r(&now, &tm_now) != nullptr;
+    if (live->time_valid) {
+        live->year   = static_cast<uint8_t>(tm_now.tm_year - 100);
+        live->month  = static_cast<uint8_t>(tm_now.tm_mon + 1);
+        live->day    = static_cast<uint8_t>(tm_now.tm_mday);
+        live->hour   = static_cast<uint8_t>(tm_now.tm_hour);
+        live->minute = static_cast<uint8_t>(tm_now.tm_min);
+        live->second = static_cast<uint8_t>(tm_now.tm_sec);
+    }
+}
+
+TFModbusTCPExceptionCode SbseController::on_goodwe_read(
+    TFModbusTCPFunctionCode /*fc*/, uint16_t start_address,
+    uint16_t reg_count, uint16_t *out_regs)
+{
+    SbseGoodwe::Live live{};
+    fill_goodwe_live(&live);
+    const TFModbusTCPExceptionCode rc =
+        SbseGoodwe::read(start_address, reg_count, out_regs, live, goodwe_settings);
+
+    note_map_traffic();
+    ++modbus_read_count;
+    state.get("modbus_read_count")->updateUint(modbus_read_count);
+    return rc;
+}
+
+TFModbusTCPExceptionCode SbseController::on_goodwe_write(
+    uint16_t start_address, uint16_t reg_count, const uint16_t *regs)
+{
+    log_map_write(start_address, reg_count, regs);
+
+    if (!SbseGoodwe::is_writable(start_address, reg_count)) {
+        return TFModbusTCPExceptionCode::IllegalDataAddress;
+    }
+
+    bool touches_ems = false;
+    for (uint16_t i = 0; i < reg_count; ++i) {
+        const uint16_t addr = static_cast<uint16_t>(start_address + i);
+        if (addr == SbseGoodwe::REG_EMS_MODE && !SbseGoodwe::ems_mode_supported(regs[i])) {
+            logger.printfln("goodwe: EMS mode %u (%s) not supported, write rejected",
+                            regs[i], SbseGoodwe::ems_mode_name(regs[i]));
+            return TFModbusTCPExceptionCode::IllegalDataValue;
+        }
+        touches_ems = touches_ems
+                   || addr == SbseGoodwe::REG_EMS_MODE
+                   || addr == SbseGoodwe::REG_EMS_POWER;
+    }
+    for (uint16_t i = 0; i < reg_count; ++i) {
+        if (!goodwe_settings.set(static_cast<uint16_t>(start_address + i), regs[i])) {
+            logger.printfln("goodwe: settings shadow full, write to %u dropped",
+                            static_cast<unsigned>(start_address + i));
+            return TFModbusTCPExceptionCode::ServerDeviceFailure;
+        }
+    }
+
+    if (touches_ems) {
+        schedule_map_apply();
+    }
+
+    note_map_traffic();
+    ++modbus_write_count;
+    state.get("modbus_write_count")->updateUint(modbus_write_count);
+    return TFModbusTCPExceptionCode::Success;
+}
+
+void SbseController::apply_goodwe_ems()
+{
+    using EmsMode = SbseGoodwe::EmsMode;
+
+    const uint16_t mode = goodwe_settings.get(SbseGoodwe::REG_EMS_MODE);
+    const int32_t  xset = goodwe_settings.get(SbseGoodwe::REG_EMS_POWER);
+
+    // EMS mode -> neutral command. Xset semantics per the goodwe library's
+    // EMSMode docs; approximations are noted in CONFIG.md. Battery power is
+    // still clamped by max_charge_w / max_discharge_w in the control loop.
+    ModbusCommand cmd   = ModbusCommand::Auto;
+    int32_t       power = 0;
+    switch (static_cast<EmsMode>(mode)) {
+        case EmsMode::ChargePv:          // Xmax + PV; Xmax 0 = PV only
+        case EmsMode::ImportAc:          // Xset + PV, grid first
+            cmd   = xset > 0 ? ModbusCommand::ForceCharge : ModbusCommand::NoDischarge;
+            power = xset;
+            break;
+        case EmsMode::ChargeBattery:
+            cmd   = xset > 0 ? ModbusCommand::ForceCharge : ModbusCommand::Idle;
+            power = xset;
+            break;
+        case EmsMode::DischargePv:
+        case EmsMode::ExportAc:
+        case EmsMode::DischargeBattery:
+            cmd   = xset > 0 ? ModbusCommand::ForceDischarge : ModbusCommand::Idle;
+            power = xset;
+            break;
+        case EmsMode::Conserve:
+            cmd = ModbusCommand::NoDischarge;
+            break;
+        case EmsMode::BatteryStandby:
+            cmd = ModbusCommand::Idle;
+            break;
+        case EmsMode::BuyPower:
+        case EmsMode::SellPower:
+            if (modbus_server_authority >= ModbusAuthority::Full) {
+                cmd   = ModbusCommand::GridTarget;
+                // Same bounds as the configurable grid targets.
+                power = std::clamp(mode == static_cast<uint16_t>(EmsMode::BuyPower) ? xset : -xset,
+                                   int32_t{-750}, int32_t{2500});
+            } else {
+                logger.printfln("goodwe: EMS %s needs modbus_server_authority = full, running auto",
+                                SbseGoodwe::ems_mode_name(mode));
+            }
+            break;
+        case EmsMode::Auto:
+        case EmsMode::OffGrid:           // rejected at write time
+        default:
+            break;
+    }
+
+    logger.printfln("goodwe: EMS %s (%u), Xset %ld W -> %s %ld W",
+                    SbseGoodwe::ems_mode_name(mode), mode, static_cast<long>(xset),
+                    modbus_command_name(cmd), static_cast<long>(power));
+    set_modbus_command(cmd, power);
+    // Refresh the mode pill right away instead of on the next loop cycle.
+    refresh_running_mode();
+}
+
+// ---------------------------------------------------------------------------
+// Solis protocol adapter
+//
+// Same pattern as GoodWe: reads from sbse_solis_map, writes into the
+// settings shadow, every write logged. Remote control (43135 + 43136 / 43129
+// + 43282) is translated into the neutral command; other writes (storage
+// mode 43110, time-of-use slots, remote dispatch 441xx) are stored and
+// logged but have no effect yet -- the logs show which ones a client uses.
+// ---------------------------------------------------------------------------
+
+void SbseController::fill_solis_live(SbseSolis::Live *live)
+{
+    if (solis_serial[0] == '\0') {
+        build_emulated_serial("SBSE", solis_serial);
+    }
+
+    uint64_t v;
+    live->grid_w    = grid_w_raw;
+    live->battery_w = battery_w_raw;
+    live->soc_pct   = soc_pct;
+    live->pv_w      = modbus_proxy.get_cached(30773, 2, &v) ? static_cast<int32_t>(v) : -1;   // DcMs.Watt[0]
+    live->pv_total_wh      = modbus_proxy.get_cached(30513, 4, &v) ? v : UINT64_MAX;  // Metering.TotWhOut
+    live->bat_discharge_wh = modbus_proxy.get_cached(31401, 4, &v) ? v : UINT64_MAX;  // CmpBMS.GetBatDschWh
+    live->serial = solis_serial;
+
+    const time_t now = time(nullptr);
+    struct tm tm_now;
+    live->time_valid = now > 1700000000 && localtime_r(&now, &tm_now) != nullptr;
+    if (live->time_valid) {
+        live->year   = static_cast<uint8_t>(tm_now.tm_year - 100);
+        live->month  = static_cast<uint8_t>(tm_now.tm_mon + 1);
+        live->day    = static_cast<uint8_t>(tm_now.tm_mday);
+        live->hour   = static_cast<uint8_t>(tm_now.tm_hour);
+        live->minute = static_cast<uint8_t>(tm_now.tm_min);
+        live->second = static_cast<uint8_t>(tm_now.tm_sec);
+    }
+}
+
+TFModbusTCPExceptionCode SbseController::on_solis_read(
+    TFModbusTCPFunctionCode /*fc*/, uint16_t start_address,
+    uint16_t reg_count, uint16_t *out_regs)
+{
+    SbseSolis::Live live{};
+    fill_solis_live(&live);
+    const TFModbusTCPExceptionCode rc =
+        SbseSolis::read(start_address, reg_count, out_regs, live, solis_settings);
+
+    note_map_traffic();
+    ++modbus_read_count;
+    state.get("modbus_read_count")->updateUint(modbus_read_count);
+    return rc;
+}
+
+TFModbusTCPExceptionCode SbseController::on_solis_write(
+    uint16_t start_address, uint16_t reg_count, const uint16_t *regs)
+{
+    log_map_write(start_address, reg_count, regs);
+
+    if (!SbseSolis::is_writable(start_address, reg_count)) {
+        return TFModbusTCPExceptionCode::IllegalDataAddress;
+    }
+
+    bool touches_rc = false;
+    for (uint16_t i = 0; i < reg_count; ++i) {
+        const uint16_t addr = static_cast<uint16_t>(start_address + i);
+        if (addr == SbseSolis::REG_RC_FORCE && regs[i] > SbseSolis::RC_FORCE_DISCHARGE) {
+            logger.printfln("solis: RC force mode %u not supported, write rejected", regs[i]);
+            return TFModbusTCPExceptionCode::IllegalDataValue;
+        }
+        touches_rc = touches_rc
+                  || addr == SbseSolis::REG_RC_FORCE
+                  || addr == SbseSolis::REG_RC_CHARGE_W
+                  || addr == SbseSolis::REG_RC_DISCHARGE_W
+                  || addr == SbseSolis::REG_RC_TIMEOUT_MIN;
+    }
+    for (uint16_t i = 0; i < reg_count; ++i) {
+        if (!solis_settings.set(static_cast<uint16_t>(start_address + i), regs[i])) {
+            logger.printfln("solis: settings shadow full, write to %u dropped",
+                            static_cast<unsigned>(start_address + i));
+            return TFModbusTCPExceptionCode::ServerDeviceFailure;
+        }
+    }
+
+    if (touches_rc) {
+        schedule_map_apply();
+    }
+
+    note_map_traffic();
+    ++modbus_write_count;
+    state.get("modbus_write_count")->updateUint(modbus_write_count);
+    return TFModbusTCPExceptionCode::Success;
+}
+
+void SbseController::apply_solis_rc()
+{
+    const uint16_t force       = solis_settings.get(SbseSolis::REG_RC_FORCE);
+    const int32_t  charge_w    = static_cast<int32_t>(solis_settings.get(SbseSolis::REG_RC_CHARGE_W)) * 10;
+    const int32_t  discharge_w = static_cast<int32_t>(solis_settings.get(SbseSolis::REG_RC_DISCHARGE_W)) * 10;
+    uint16_t       timeout_min = solis_settings.get(SbseSolis::REG_RC_TIMEOUT_MIN);
+    if (timeout_min == 0) {
+        timeout_min = 5;   // inverter default
+    }
+
+    ModbusCommand cmd   = ModbusCommand::Auto;
+    int32_t       power = 0;
+    if (force == SbseSolis::RC_FORCE_CHARGE) {
+        power = charge_w;
+        cmd   = power > 0 ? ModbusCommand::ForceCharge : ModbusCommand::Idle;
+    } else if (force == SbseSolis::RC_FORCE_DISCHARGE) {
+        power = discharge_w;
+        cmd   = power > 0 ? ModbusCommand::ForceDischarge : ModbusCommand::Idle;
+    }
+
+    // Like the real inverter, a remote-control command lapses back to the
+    // storage mode (auto) unless the client re-writes it within the timeout.
+    solis_rc_deadline_us = cmd == ModbusCommand::Auto
+                         ? -1_us
+                         : now_us() + micros_t{static_cast<int64_t>(timeout_min) * 60000000LL};
+
+    logger.printfln("solis: RC force %u, charge %ld W, discharge %ld W, timeout %u min -> %s %ld W",
+                    force, static_cast<long>(charge_w), static_cast<long>(discharge_w),
+                    timeout_min, modbus_command_name(cmd), static_cast<long>(power));
+    set_modbus_command(cmd, power);
+    refresh_running_mode();
+}
+
+void SbseController::solis_rc_timeout_tick()
+{
+    if (solis_rc_deadline_us == -1_us || !deadline_elapsed(solis_rc_deadline_us)) {
+        return;
+    }
+    logger.printfln("solis: RC timeout, back to auto");
+    solis_rc_deadline_us = -1_us;
+    solis_settings.set(SbseSolis::REG_RC_FORCE, SbseSolis::RC_FORCE_NONE);
+    set_modbus_command(ModbusCommand::Auto, 0);
+    refresh_running_mode();
+}
+
+// ---------------------------------------------------------------------------
 // Protocol-neutral Modbus command handling
 //
 // Shared by every protocol adapter. Nothing below knows about SMA OpMod
@@ -642,26 +1038,44 @@ TFModbusTCPExceptionCode SbseController::on_sma_read(
 
 void SbseController::set_modbus_command(ModbusCommand cmd, int32_t power_w)
 {
+    // power_w: force magnitude for ForceCharge / ForceDischarge, signed grid
+    // target (positive = import) for GridTarget, ignored otherwise.
+    const bool forcing = cmd == ModbusCommand::ForceCharge || cmd == ModbusCommand::ForceDischarge;
     modbus_cmd           = cmd;
-    modbus_cmd_power_w   = cmd == ModbusCommand::Auto ? 0 : std::max(power_w, int32_t{0});
+    modbus_cmd_power_w   = forcing ? std::max(power_w, int32_t{0}) : 0;
+    modbus_grid_target_w = cmd == ModbusCommand::GridTarget ? power_w : 0;
     last_modbus_write_us = now_us();
     modbus_active        = true;
     state.get("modbus_active") ->updateBool(true);
     state.get("modbus_cmd")    ->updateString(modbus_command_name(modbus_cmd));
     state.get("modbus_force_w")->updateInt(modbus_force_setpoint_w());
+    state.get("modbus_grid_target_w")->updateInt(modbus_grid_target_w);
 }
 
 void SbseController::clear_modbus_command()
 {
     modbus_cmd           = ModbusCommand::Auto;
     modbus_cmd_power_w   = 0;
+    modbus_grid_target_w = 0;
     sma_op_mod           = SMA_OPMOD_DEFAULT;
+    // GoodWe adapter: back to EMS auto so a client reading 47511 / 47512
+    // sees what is actually in force. Drop a pending debounced apply.
+    if (map_apply_task_id != 0) {
+        task_scheduler.cancel(map_apply_task_id);
+        map_apply_task_id = 0;
+    }
+    goodwe_settings.set(SbseGoodwe::REG_EMS_MODE, static_cast<uint16_t>(SbseGoodwe::EmsMode::Auto));
+    goodwe_settings.set(SbseGoodwe::REG_EMS_POWER, 0);
+    // Solis adapter: remote control off.
+    solis_settings.set(SbseSolis::REG_RC_FORCE, SbseSolis::RC_FORCE_NONE);
+    solis_rc_deadline_us = -1_us;
     modbus_active        = false;
     last_modbus_write_us = -1_us;
     state.get("modbus_active") ->updateBool(false);
     state.get("modbus_cmd")    ->updateString(modbus_command_name(ModbusCommand::Auto));
     state.get("modbus_op_mod") ->updateUint(SMA_OPMOD_DEFAULT);
     state.get("modbus_force_w")->updateInt(0);
+    state.get("modbus_grid_target_w")->updateInt(0);
 }
 
 int32_t SbseController::modbus_force_setpoint_w() const
@@ -670,8 +1084,19 @@ int32_t SbseController::modbus_force_setpoint_w() const
         case ModbusCommand::ForceCharge:    return -modbus_cmd_power_w;
         case ModbusCommand::ForceDischarge: return  modbus_cmd_power_w;
         case ModbusCommand::Auto:           return 0;
+        case ModbusCommand::Idle:           return 0;
+        case ModbusCommand::NoDischarge:    return 0;
+        case ModbusCommand::NoCharge:       return 0;
+        case ModbusCommand::GridTarget:     return 0;
         default:                            return 0;
     }
+}
+
+bool SbseController::modbus_cmd_is_fixed() const
+{
+    return modbus_cmd == ModbusCommand::ForceCharge
+        || modbus_cmd == ModbusCommand::ForceDischarge
+        || modbus_cmd == ModbusCommand::Idle;
 }
 
 void SbseController::revert_modbus_overrides()
@@ -688,6 +1113,8 @@ void SbseController::revert_modbus_overrides()
 
 void SbseController::watchdog_tick()
 {
+    solis_rc_timeout_tick();
+
     if (!modbus_active || modbus_server_watchdog_ms == 0 || last_modbus_write_us == -1_us) {
         return;
     }

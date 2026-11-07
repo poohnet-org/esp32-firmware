@@ -46,6 +46,7 @@ const char *sbse_modbus_protocol_name(SbseModbusProtocol protocol)
     switch (protocol) {
         case SbseModbusProtocol::Sma:    return "sma";
         case SbseModbusProtocol::Goodwe: return "goodwe";
+        case SbseModbusProtocol::Solis:  return "solis";
         default:                         return "unknown";
     }
 }
@@ -68,6 +69,12 @@ void SbseModbusServer::set_handlers(OpModHandler on_op_mod_,
     on_op_mod   = std::move(on_op_mod_);
     on_setpoint = std::move(on_setpoint_);
     on_read     = std::move(on_read_);
+}
+
+void SbseModbusServer::set_map_handlers(ReadHandler on_read_, WriteHandler on_write_)
+{
+    on_map_read  = std::move(on_read_);
+    on_map_write = std::move(on_write_);
 }
 
 void SbseModbusServer::configure(bool enabled_, uint16_t port_, uint8_t unit_id_,
@@ -125,6 +132,8 @@ void SbseModbusServer::start()
     }
 
     running               = true;
+    seen_request_count    = 0;
+    seen_requests_overflow_logged = false;
     last_started_enabled  = enabled;
     last_started_port     = port;
     last_started_protocol = protocol;
@@ -136,9 +145,6 @@ void SbseModbusServer::start()
     logger.printfln("listening on port %u, unit_id=%u, protocol=%s",
                     port, static_cast<unsigned>(unit_id),
                     sbse_modbus_protocol_name(protocol));
-    if (protocol == SbseModbusProtocol::Goodwe) {
-        logger.printfln("GoodWe emulation not implemented yet -- all requests are rejected");
-    }
 }
 
 void SbseModbusServer::stop()
@@ -170,14 +176,18 @@ TFModbusTCPExceptionCode SbseModbusServer::dispatch(
     uint16_t data_count,
     void *data)
 {
-    // Unit ID filter: 0 in our config means "accept any unit id".
-    if (unit_id != 0 && req_unit_id != unit_id) {
-        return TFModbusTCPExceptionCode::IllegalDataAddress;
+    if (protocol != SbseModbusProtocol::Sma) {
+        // Log rejected unit ids too: a client configured for another unit
+        // id would otherwise be invisible.
+        const TFModbusTCPExceptionCode rc = (unit_id != 0 && req_unit_id != unit_id)
+            ? TFModbusTCPExceptionCode::IllegalDataAddress
+            : dispatch_map(function_code, start_address, data_count, data);
+        log_request_once(req_unit_id, function_code, start_address, data_count, rc);
+        return rc;
     }
 
-    // GoodWe register map not implemented yet: reject everything rather than
-    // answering with the SMA map under a GoodWe unit id.
-    if (protocol == SbseModbusProtocol::Goodwe) {
+    // Unit ID filter: 0 in our config means "accept any unit id".
+    if (unit_id != 0 && req_unit_id != unit_id) {
         return TFModbusTCPExceptionCode::IllegalDataAddress;
     }
 
@@ -222,4 +232,60 @@ TFModbusTCPExceptionCode SbseModbusServer::dispatch(
     }
 
     return TFModbusTCPExceptionCode::IllegalDataAddress;
+}
+
+TFModbusTCPExceptionCode SbseModbusServer::dispatch_map(
+    TFModbusTCPFunctionCode function_code,
+    uint16_t start_address,
+    uint16_t data_count,
+    void *data)
+{
+    if (function_code == TFModbusTCPFunctionCode::ReadHoldingRegisters
+        || function_code == TFModbusTCPFunctionCode::ReadInputRegisters) {
+        if (!on_map_read) {
+            return TFModbusTCPExceptionCode::IllegalFunction;
+        }
+        return on_map_read(function_code, start_address, data_count,
+                              static_cast<uint16_t *>(data));
+    }
+    if (function_code == TFModbusTCPFunctionCode::WriteMultipleRegisters) {
+        if (!on_map_write) {
+            return TFModbusTCPExceptionCode::IllegalFunction;
+        }
+        return on_map_write(start_address, data_count,
+                               static_cast<const uint16_t *>(data));
+    }
+    return TFModbusTCPExceptionCode::IllegalFunction;
+}
+
+void SbseModbusServer::log_request_once(uint8_t req_unit_id,
+                                        TFModbusTCPFunctionCode function_code,
+                                        uint16_t start_address, uint16_t data_count,
+                                        TFModbusTCPExceptionCode result)
+{
+    const uint8_t fc = static_cast<uint8_t>(function_code);
+    const uint8_t rc = static_cast<uint8_t>(result);
+    for (size_t i = 0; i < seen_request_count; ++i) {
+        const SeenRequest &r = seen_requests[i];
+        if (r.start_address == start_address && r.data_count == data_count
+            && r.unit_id == req_unit_id && r.function_code == fc && r.result == rc) {
+            return;
+        }
+    }
+    if (seen_request_count >= SEEN_REQUESTS_MAX) {
+        if (!seen_requests_overflow_logged) {
+            seen_requests_overflow_logged = true;
+            logger.printfln("%s: more than %u distinct requests, not logging new ones",
+                            sbse_modbus_protocol_name(protocol),
+                            static_cast<unsigned>(SEEN_REQUESTS_MAX));
+        }
+        return;
+    }
+    seen_requests[seen_request_count++] = {start_address, data_count, req_unit_id, fc, rc};
+    logger.printfln("%s: unit %u %s %u+%u -> %s",
+                    sbse_modbus_protocol_name(protocol),
+                    static_cast<unsigned>(req_unit_id),
+                    get_tf_modbus_tcp_function_code_name(function_code),
+                    start_address, data_count,
+                    get_tf_modbus_tcp_exception_code_name(result));
 }

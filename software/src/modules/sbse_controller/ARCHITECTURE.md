@@ -18,8 +18,9 @@ A self-contained ESP32 firmware module that:
    and the built-in dashboard** under identical semantics.
 4. Optionally runs a **Modbus TCP server that emulates an inverter** so an
    external controller can steer it: an SMA hybrid inverter (e.g. a WARP
-   charger configured for "SMA Hybrid Inverter", evcc `sma-hybrid`) or,
-   once implemented, a GoodWe hybrid inverter (e.g. the Tibber app).
+   charger configured for "SMA Hybrid Inverter", evcc `sma-hybrid`) or a
+   GoodWe ET hybrid inverter (evcc `goodwe-hybrid`) or a Solis S5/S6 hybrid
+   inverter (e.g. the Tibber app's Solis integration).
    Exactly one protocol is active at a time (`modbus_server_protocol`).
 
 The *upstream* side is SBSE-only by design: the register map the controller
@@ -42,6 +43,10 @@ src/modules/sbse_controller/
   sbse_control_loop.cpp     tick pipeline + register map
   sbse_modbus_server.{h,cpp}  inverter-emulating Modbus server (protocol)
   sbse_modbus_proxy.{h,cpp}   SMA-hybrid read-side register cache
+  sbse_goodwe_map.{h,cpp}     GoodWe ET register map (pure data)
+  sbse_solis_map.{h,cpp}      Solis S5/S6 hybrid register map (pure data)
+  sbse_register_shadow.h      settings-shadow table shared by GoodWe / Solis
+  sbse_register_writer.h      response-buffer writer shared by GoodWe / Solis
   sbse_trace_history.{h,cpp}  5-min 1 Hz ring buffer (HTTP endpoint)
 
 web/src/modules/sbse_controller/
@@ -69,6 +74,8 @@ The split below the C++ level is by **responsibility**, not size.
 | `connect_callback` / `disconnect_callback` (Modbus *client* connection events) | `sbse_control_loop.cpp` |
 | Listener socket, dispatch, unit-id filter for the *server* | `sbse_modbus_server.{h,cpp}` |
 | SMA-hybrid read-side register cache + round-robin upstream poll | `sbse_modbus_proxy.{h,cpp}` |
+| GoodWe register layout, EMS mode enum | `sbse_goodwe_map.{h,cpp}` |
+| Solis register layout, remote-control registers | `sbse_solis_map.{h,cpp}` |
 | Trace ring buffer, 1 Hz throttle, `GET /sbse_controller/history` | `sbse_trace_history.{h,cpp}` |
 
 ## Class layout
@@ -123,7 +130,8 @@ using ReadHandler     = std::function<TFModbusTCPExceptionCode(TFModbusTCPFuncti
                                                                uint16_t reg_count,
                                                                uint16_t *out_regs)>;
 
-void set_handlers(OpModHandler, SetpointHandler, ReadHandler);
+void set_handlers(OpModHandler, SetpointHandler, ReadHandler);         // SMA
+void set_map_handlers(ReadHandler, WriteHandler);                      // GoodWe / Solis
 void configure(bool enabled, uint16_t port, uint8_t unit_id, SbseModbusProtocol protocol);
 bool needs_restart_for(bool new_enabled, uint16_t new_port, SbseModbusProtocol new_protocol) const;
 void start();   void stop();   void restart();
@@ -133,9 +141,12 @@ void start();   void stop();   void restart();
   (length 2) and any even-aligned 2/4/6/8/10-register sub-block within
   `40793..40802`; plus ReadHoldingRegisters / ReadInputRegisters at any
   address (delegated wholesale to `on_read`). Anything else →
-  `IllegalFunction` / `IllegalDataAddress`. In GoodWe mode it currently
-  rejects every request (`IllegalDataAddress`) until the GoodWe adapter
-  exists.
+  `IllegalFunction` / `IllegalDataAddress`. In GoodWe and Solis mode every
+  read goes to the map read handler and every write (FC 16, and FC 6, which
+  the library delivers as a one-register FC 16) to the map write handler;
+  the controller dispatches on the protocol, address validation lives in
+  `sbse_goodwe_map` / `sbse_solis_map`. These modes also log each distinct
+  request shape once per listener start.
 - Knows nothing about `active_config`, force-mode, the watchdog, or
   the SMA OpMod *values* (it just hands the raw uint32 to the handler).
 - Owns the underlying `TFModbusTCPServer`, its 20 ms tick task, and
@@ -375,8 +386,9 @@ orthogonal to that derived signal.
 | `active_config` | `SbseController::active_config` | HTTP/MQTT/dashboard `active_config_update`, **plus** internal mutations from `apply_modbus_setpoint_block` (the Modbus-driven path bypasses the command handler to avoid clearing its own force-mode state) |
 | Cached fast-path mirrors (`kp`, `kd`, `max_*`, `grid_charge_target_w`, `grid_discharge_target_w`, `alpha_*`, `deadband_w`) | `SbseController` members | `apply_runtime_from_active()` after any `active_config` change |
 | `state` (read-only) | `SbseController::state` | One updater per field, scattered across the cycle. Auto-publishes via the API event bus. |
-| `modbus_cmd`, `modbus_cmd_power_w`, `modbus_active`, `last_modbus_write_us` (protocol-neutral) | `SbseController` members | `set_modbus_command()` from the protocol adapters; `clear_modbus_command()` on operator takeover / watchdog / protocol switch |
+| `modbus_cmd`, `modbus_cmd_power_w`, `modbus_grid_target_w`, `modbus_active`, `last_modbus_write_us` (protocol-neutral) | `SbseController` members | `set_modbus_command()` from the protocol adapters; `clear_modbus_command()` on operator takeover / watchdog / protocol switch |
 | `sma_op_mod` (SMA adapter latch) | `SbseController` member | `on_sma_op_mod_write()`; reset by `clear_modbus_command()` |
+| `goodwe_settings` / `solis_settings` (settings shadows), `map_apply_task_id` (debounce), `solis_rc_deadline_us` (RC timeout) | `SbseController` members | `on_goodwe_write()` / `apply_goodwe_ems()`, `on_solis_write()` / `apply_solis_rc()`; command registers reset by `clear_modbus_command()` |
 | Modbus server (listener, dispatch state) | `SbseModbusServer` | `configure()` / `start()` / `stop()` from controller |
 | Trace ring buffer | `SbseTraceHistory` | `add_sample()` from control loop |
 

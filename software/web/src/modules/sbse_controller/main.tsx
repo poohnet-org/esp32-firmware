@@ -682,7 +682,7 @@ function SbseControllerChart({samples}: SbseControllerChartProps) {
 type ControllerConfig = API.getType["sbse_controller/config"];
 
 // Conventional Modbus unit id per emulated protocol (index = modbus_server_protocol).
-const MODBUS_DEFAULT_UNIT_ID = [3, 247];
+const MODBUS_DEFAULT_UNIT_ID = [3, 247, 1];   // SMA, GoodWe, Solis
 
 export class SbseController extends ConfigComponent<"sbse_controller/config",
                                                     {status_ref?: RefObject<SbseControllerStatus>}> {
@@ -863,6 +863,7 @@ export class SbseController extends ConfigComponent<"sbse_controller/config",
                             items={[
                                 ["0", __("sbse_controller.content.modbus_server_protocol_sma")],
                                 ["1", __("sbse_controller.content.modbus_server_protocol_goodwe")],
+                                ["2", __("sbse_controller.content.modbus_server_protocol_solis")],
                             ]}
                             value={`${state.modbus_server_protocol}`}
                             onValue={(v) => {
@@ -954,8 +955,11 @@ function build_status(): StatusResult | null {
             return {
                 status: ModuleStatus.Ok,
                 text:   () => {
-                    const lo = ac.grid_charge_target_w;
-                    const hi = ac.grid_discharge_target_w;
+                    // A GoodWe client in buy/sell-power mode replaces the
+                    // operator's targets with its own single target.
+                    const client_target = st.modbus_cmd === "grid_target";
+                    const lo = client_target ? st.modbus_grid_target_w : ac.grid_charge_target_w;
+                    const hi = client_target ? st.modbus_grid_target_w : ac.grid_discharge_target_w;
                     const target_text = lo === hi
                         ? `${fmt_w(lo)} W`
                         : `${fmt_w(lo)}…${fmt_w(hi)} W`;

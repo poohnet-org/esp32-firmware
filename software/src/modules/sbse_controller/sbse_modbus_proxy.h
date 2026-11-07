@@ -88,6 +88,12 @@ public:
     // success, last-known value afterwards).
     void mark_group_done(size_t group_idx, bool success);
 
+    // Read a cached value of reg_count registers (1..4, big-endian, high
+    // word first) starting at addr. False if the group isn't fresh yet, the
+    // range isn't inside one cached group, or the value is the all-ones
+    // NaN sentinel. Used by the GoodWe adapter to reuse the SMA poll set.
+    bool get_cached(uint16_t addr, uint16_t reg_count, uint64_t *out) const;
+
     // Fill response_buf[0..count-1] with the values for [start_addr,
     // start_addr+count). Always returns Success; uncovered registers get
     // the per-type NaN sentinel.

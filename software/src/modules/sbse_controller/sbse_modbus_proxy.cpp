@@ -126,6 +126,34 @@ void SbseModbusProxy::mark_group_done(size_t group_idx, bool success)
     }
 }
 
+bool SbseModbusProxy::get_cached(uint16_t addr, uint16_t reg_count, uint64_t *out) const
+{
+    if (reg_count == 0 || reg_count > 4) {
+        return false;
+    }
+    const size_t idx = find_group(addr);
+    if (idx == NUM_GROUPS) {
+        return false;
+    }
+    const Group &g = GROUPS[idx];
+    if (g.source != Source::Cached || (fresh_mask & (1u << idx)) == 0
+        || addr + reg_count > g.addr + g.reg_count) {
+        return false;
+    }
+    uint64_t value   = 0;
+    bool     all_ones = true;
+    for (uint16_t i = 0; i < reg_count; ++i) {
+        const uint16_t r = cache[g.cache_offset + (addr - g.addr) + i];
+        all_ones = all_ones && r == 0xFFFFu;
+        value = (value << 16) | r;
+    }
+    if (all_ones) {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Read-path: pack a server response from cache + synthesis.
 // ---------------------------------------------------------------------------
