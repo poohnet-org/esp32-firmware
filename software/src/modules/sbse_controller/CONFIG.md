@@ -311,11 +311,13 @@ Emulates a Solis S5/S6 hybrid inverter (Solis "ESINV-33000ID" hybrid protocol) o
 
 | `43135` (RC force) | Power register | Command |
 |---|---|---|
-| `0` none | -- | `auto` |
+| `0` none | -- | `auto`, or a block from the current limits (below) |
 | `1` force charge | `43136` × 10 W | `force_charge` (`idle` at 0 W) |
 | `2` force discharge | `43129` × 10 W | `force_discharge` (`idle` at 0 W) |
 
 Values > 2 are rejected with `IllegalDataValue`. As on the real inverter, a force command lapses back to `auto` (and `43135` to `0`) unless the client re-writes it within `43282` minutes (default 5).
+
+While `43135 = 0`, a client-written `0` in the battery current limits blocks that direction: `43117` (max charge current) → `no_charge`, `43118` (max discharge current) → `no_discharge`, both → `idle`. This is how WARP's Solis battery control implements "block charge / discharge". Non-zero limits aren't enforced (the configured max charge / discharge power applies). Like on the real inverter the limits persist without the RC timeout; the Modbus watchdog drops them together with the other overrides.
 
 **Remote dispatch** (`44100..44112`, protocol Ver3.4; the Tibber Bridge reads `44100+17`) takes precedence over remote control while `44100 = 1`. The power is `44106..44107` (S32, high word first, W/10); `44101` is the failsafe interval in minutes (default 5), after which the command lapses to `auto` and `44100` to `0` unless re-written:
 

@@ -61,6 +61,8 @@ public:
 
     // Remote control ("RC") registers.
     static constexpr uint16_t REG_STORAGE_CONTROL = 43110;   // storage mode bits
+    static constexpr uint16_t REG_CHARGE_LIMIT_DA    = 43117; // max charge current [0.1 A], 0 = block
+    static constexpr uint16_t REG_DISCHARGE_LIMIT_DA = 43118; // max discharge current [0.1 A], 0 = block
     static constexpr uint16_t REG_RC_DISCHARGE_W  = 43129;   // force discharge power, W/10
     static constexpr uint16_t REG_RC_FORCE        = 43135;   // 0 none, 1 charge, 2 discharge
     static constexpr uint16_t REG_RC_CHARGE_W     = 43136;   // force charge power, W/10

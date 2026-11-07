@@ -60,6 +60,17 @@ public:
         return false;
     }
 
+    // Forget a client write; the register reads its default again.
+    void erase(uint16_t addr)
+    {
+        for (size_t i = 0; i < count; ++i) {
+            if (entries[i].addr == addr) {
+                entries[i] = entries[--count];
+                return;
+            }
+        }
+    }
+
     // false = table full (the write is dropped)
     bool set(uint16_t addr, uint16_t value)
     {

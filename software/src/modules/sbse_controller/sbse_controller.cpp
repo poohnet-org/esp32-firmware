@@ -972,6 +972,8 @@ TFModbusTCPExceptionCode SbseController::on_solis_write(
                   || addr == SbseSolis::REG_RC_CHARGE_W
                   || addr == SbseSolis::REG_RC_DISCHARGE_W
                   || addr == SbseSolis::REG_RC_TIMEOUT_MIN
+                  || addr == SbseSolis::REG_CHARGE_LIMIT_DA
+                  || addr == SbseSolis::REG_DISCHARGE_LIMIT_DA
                   || (addr >= SbseSolis::REG_RD_FIRST && addr <= SbseSolis::REG_RD_LAST);
     }
     for (uint16_t i = 0; i < reg_count; ++i) {
@@ -1021,13 +1023,36 @@ void SbseController::apply_solis_rc()
 
     // Like the real inverter, a remote-control command lapses back to the
     // storage mode (auto) unless the client re-writes it within the timeout.
-    solis_rc_deadline_us = cmd == ModbusCommand::Auto
+    solis_rc_deadline_us = force == SbseSolis::RC_FORCE_NONE
                          ? -1_us
                          : now_us() + micros_t{static_cast<int64_t>(timeout_min) * 60000000LL};
 
-    logger.printfln("solis: RC force %u, charge %ld W, discharge %ld W, timeout %u min -> %s %ld W",
+    // Battery current limits 43117 / 43118: a client-written 0 blocks that
+    // direction (WARP's "block charge / discharge"). Other values are not
+    // enforced -- the operator's max charge / discharge power applies. Like
+    // on the real inverter they persist (no RC timeout); the Modbus
+    // watchdog still reverts them when the client goes away.
+    const bool has_charge_limit    = solis_settings.contains(SbseSolis::REG_CHARGE_LIMIT_DA);
+    const bool has_discharge_limit = solis_settings.contains(SbseSolis::REG_DISCHARGE_LIMIT_DA);
+    const bool charge_blocked    = has_charge_limit    && solis_settings.get(SbseSolis::REG_CHARGE_LIMIT_DA) == 0;
+    const bool discharge_blocked = has_discharge_limit && solis_settings.get(SbseSolis::REG_DISCHARGE_LIMIT_DA) == 0;
+    if (force == SbseSolis::RC_FORCE_NONE) {
+        if (charge_blocked && discharge_blocked) {
+            cmd = ModbusCommand::Idle;
+        } else if (charge_blocked) {
+            cmd = ModbusCommand::NoCharge;
+        } else if (discharge_blocked) {
+            cmd = ModbusCommand::NoDischarge;
+        }
+    }
+
+    char charge_lim[8]    = "-";
+    char discharge_lim[8] = "-";
+    if (has_charge_limit)    snprintf(charge_lim,    sizeof(charge_lim),    "%u", solis_settings.get(SbseSolis::REG_CHARGE_LIMIT_DA));
+    if (has_discharge_limit) snprintf(discharge_lim, sizeof(discharge_lim), "%u", solis_settings.get(SbseSolis::REG_DISCHARGE_LIMIT_DA));
+    logger.printfln("solis: RC force %u, charge %ld W, discharge %ld W, timeout %u min, current limits %s / %s dA -> %s %ld W",
                     force, static_cast<long>(charge_w), static_cast<long>(discharge_w),
-                    timeout_min, modbus_command_name(cmd), static_cast<long>(power));
+                    timeout_min, charge_lim, discharge_lim, modbus_command_name(cmd), static_cast<long>(power));
     set_modbus_command(cmd, power);
     refresh_running_mode();
 }
@@ -1144,6 +1169,8 @@ void SbseController::clear_modbus_command()
     // Solis adapter: remote control off.
     solis_settings.set(SbseSolis::REG_RC_FORCE, SbseSolis::RC_FORCE_NONE);
     solis_settings.set(SbseSolis::REG_RD_ENABLE, 0);
+    solis_settings.erase(SbseSolis::REG_CHARGE_LIMIT_DA);
+    solis_settings.erase(SbseSolis::REG_DISCHARGE_LIMIT_DA);
     solis_rc_deadline_us = -1_us;
     modbus_active        = false;
     last_modbus_write_us = -1_us;
