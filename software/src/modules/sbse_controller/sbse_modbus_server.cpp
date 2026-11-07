@@ -79,23 +79,28 @@ void SbseModbusServer::start()
         return;
     }
 
+    // Bind to the IPv6 any-address (::); the library clears IPV6_V6ONLY, so
+    // the single dual-stack socket accepts IPv4 and IPv6 clients (same as
+    // the upstream modbus_tcp module).
+    ip_addr_t bind_addr = IPADDR6_INIT(0, 0, 0, 0);
     const bool ok = server.start(
-        0, port,
-        [](uint32_t peer_address, uint16_t peer_port) {
-            char peer_str[INET_ADDRSTRLEN];
-            tf_ip4addr_ntoa(&peer_address, peer_str, sizeof(peer_str));
-            logger.printfln("client %s:%u connected", peer_str, peer_port);
+        &bind_addr, port,
+        [](uint64_t connection_id, const ip_addr_t *peer_address, uint16_t peer_port) {
+            char peer_str[INET6_ADDRSTRLEN];
+            tf_ipaddr_ntoa(peer_address, peer_str, sizeof(peer_str));
+            logger.printfln("client %llu %s:%u connected",
+                            static_cast<unsigned long long>(connection_id), peer_str, peer_port);
         },
-        [](uint32_t peer_address, uint16_t peer_port,
+        [](uint64_t connection_id, const ip_addr_t *peer_address, uint16_t peer_port,
            TFModbusTCPServerDisconnectReason reason, int error_number) {
-            char peer_str[INET_ADDRSTRLEN];
-            tf_ip4addr_ntoa(&peer_address, peer_str, sizeof(peer_str));
-            logger.printfln("client %s:%u disconnected: %s (error %d)",
-                            peer_str, peer_port,
+            char peer_str[INET6_ADDRSTRLEN];
+            tf_ipaddr_ntoa(peer_address, peer_str, sizeof(peer_str));
+            logger.printfln("client %llu %s:%u disconnected: %s (error %d)",
+                            static_cast<unsigned long long>(connection_id), peer_str, peer_port,
                             get_tf_modbus_tcp_server_client_disconnect_reason_name(reason),
                             error_number);
         },
-        [this](uint8_t req_unit_id, TFModbusTCPFunctionCode fc,
+        [this](uint64_t /*connection_id*/, uint8_t req_unit_id, TFModbusTCPFunctionCode fc,
                uint16_t start_address, uint16_t data_count, void *data) {
             return this->dispatch(req_unit_id, fc, start_address, data_count, data);
         });

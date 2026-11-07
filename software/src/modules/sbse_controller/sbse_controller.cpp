@@ -370,7 +370,7 @@ void SbseController::register_urls()
         // anything is off (e.g. read failure -> stale).
         if (!enabled) {
             publish_mode(Mode::Disabled);
-        } else if (connected_client == nullptr) {
+        } else if (shared_client == nullptr) {
             publish_mode(Mode::NotConnected);
         } else {
             publish_mode(Mode::Stale);
@@ -391,7 +391,7 @@ void SbseController::register_events()
     });
 
     // Kick the tick once the config-driven host/port is in place. The tick is
-    // a no-op until connect_callback flips connected_client to non-null.
+    // a no-op until connect_callback flips shared_client to non-null.
     tick_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
         this->tick();
     }, tick_ms, tick_ms);

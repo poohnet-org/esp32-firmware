@@ -232,7 +232,7 @@ bool SbseController::begin_cycle()
         }
     }
 
-    if (connected_client == nullptr) {
+    if (shared_client == nullptr) {
         publish_mode(Mode::NotConnected);
         return false;
     }
@@ -259,7 +259,7 @@ void SbseController::tick()
 
 void SbseController::read_grid_power()
 {
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(GRID_METER_UNIT_ID,
                      TFModbusTCPFunctionCode::ReadInputRegisters,
@@ -281,7 +281,7 @@ void SbseController::read_grid_power()
 
 void SbseController::read_battery_power()
 {
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::ReadInputRegisters,
@@ -325,7 +325,7 @@ void SbseController::read_rated_power()
 {
     // One-shot: read Nameplate WMaxOutRtg (rated active power) to size the import
     // floor clamp. Reuses buf_battery (its data has already been consumed above).
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::ReadInputRegisters,
@@ -357,7 +357,7 @@ void SbseController::read_rated_power()
 
 void SbseController::read_soc()
 {
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::ReadInputRegisters,
@@ -711,7 +711,7 @@ void SbseController::send_setpoint(int32_t watts)
     write_int32be(buf_setpoint + 0, watts);     // WSptMax (41467)
     write_int32be(buf_setpoint + 2, wsptmin);   // WSptMin (41469)
 
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::WriteMultipleRegisters,
@@ -758,7 +758,7 @@ void SbseController::send_import_floor(int32_t floor_w, bool then_setpoint, int3
     // last_written_w) are NOT touched here.
     write_int32be(buf_import_floor + 0, floor_w);
 
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::WriteMultipleRegisters,
@@ -799,14 +799,14 @@ void SbseController::send_zero_w()
     //
     // Uses buf_zero, not buf_setpoint, so a fire-and-forget call from outside
     // the cycle pipeline can't trample on an in-flight cycle's payload.
-    if (connected_client == nullptr) {
+    if (shared_client == nullptr) {
         return;
     }
 
     write_int32be(buf_zero + 0, 0);
     write_int32be(buf_zero + 2, 0);   // pin WSptMin = WSptMax = 0 to truly park the battery
 
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::WriteMultipleRegisters,
@@ -847,7 +847,7 @@ void SbseController::cycle_failed(const char *where,
     if (safety_zero_after_failures != 0
         && !safety_zero_armed
         && consecutive_failures >= safety_zero_after_failures
-        && connected_client != nullptr) {
+        && shared_client != nullptr) {
         safety_zero_armed = true;
         logger.printfln("read failure streak hit %lu, commanding 0 W safety setpoint",
                         static_cast<unsigned long>(consecutive_failures));
@@ -866,7 +866,7 @@ void SbseController::send_safety_zero()
     write_int32be(buf_zero + 0, 0);
     write_int32be(buf_zero + 2, 0);   // pin WSptMin = WSptMax = 0 to truly park the battery
 
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
 
     client->transact(INVERTER_UNIT_ID,
                      TFModbusTCPFunctionCode::WriteMultipleRegisters,
@@ -951,7 +951,7 @@ SbseController::Mode SbseController::current_running_mode() const
 
 void SbseController::run_proxy_poll()
 {
-    if (connected_client == nullptr) {
+    if (shared_client == nullptr) {
         return;
     }
     size_t   idx;
@@ -963,7 +963,7 @@ void SbseController::run_proxy_poll()
         return;
     }
 
-    auto *client = static_cast<TFModbusTCPSharedClient *>(connected_client);
+    auto *client = static_cast<TFModbusTCPSharedClient *>(shared_client);
     client->transact(upstream_unit,
                      TFModbusTCPFunctionCode::ReadInputRegisters,
                      addr,
