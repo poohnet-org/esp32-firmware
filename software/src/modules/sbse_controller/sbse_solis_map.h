@@ -101,6 +101,7 @@ public:
         uint8_t  soc_pct;           // 255 = unknown
         int32_t  pv_w;              // -1 = unknown
         uint64_t pv_total_wh;       // UINT64_MAX = unknown
+        uint64_t bat_charge_wh;     // UINT64_MAX = unknown
         uint64_t bat_discharge_wh;  // UINT64_MAX = unknown
         uint32_t bat_voltage_cv;    // battery voltage [0.01 V], 0 = unknown
         int32_t  bat_current_ma;    // battery current [mA], sign ignored; INT32_MIN = unknown

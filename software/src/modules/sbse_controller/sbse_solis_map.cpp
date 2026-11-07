@@ -125,6 +125,7 @@ static void solis_fill_live(SbseRegisterWriter &w, const SbseSolis::Live &live,
     // |P|); evcc's RHI template would read the sign inverted.
     w.s32(33149, live.battery_w > 0 ? bat_abs : -bat_abs);
     w.s32(33151, inverter_w);                                  // AC grid port power
+    w.u32(33161, solis_wh_to_kwh(live.bat_charge_wh));         // battery charge total [kWh]
     w.u32(33165, solis_wh_to_kwh(live.bat_discharge_wh));      // battery discharge total [kWh]
 
     w.s32(33263, export_w);                                    // meter total active power (export +)

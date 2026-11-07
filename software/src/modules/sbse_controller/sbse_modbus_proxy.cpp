@@ -84,12 +84,14 @@ const SbseModbusProxy::Group SbseModbusProxy::GROUPS[] = {
     // after the synthesized 30845 group, so SMA reads of 30845 still get the
     // live SoC (find_group returns the first match).
     { 30843, 10, UPSTREAM_INVERTER_UNIT,  42, Source::Cached,      NaNStyle::UnsignedMax   },
+    // 31397  BatChrg.BatChrg               uint64nan -- cumulative charge energy (Wh)
+    { 31397, 4, UPSTREAM_INVERTER_UNIT,   52, Source::Cached,      NaNStyle::UnsignedMax   },
 };
 
 const size_t SbseModbusProxy::NUM_GROUPS = sizeof(GROUPS) / sizeof(GROUPS[0]);
 
 // Manual cache layout (offsets above) -- the last group ends at
-// cache_offset 42 + reg_count 10 = 52, below CACHE_SIZE (64). Add a
+// cache_offset 52 + reg_count 4 = 56, below CACHE_SIZE (64). Add a
 // new group? Reserve a slot at the next free offset and bump the bound.
 
 // ---------------------------------------------------------------------------

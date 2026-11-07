@@ -759,7 +759,7 @@ void SbseController::fill_goodwe_live(SbseGoodwe::Live *live)
     live->pv_total_wh      = modbus_proxy.get_cached(30513, 4, &v) ? v : UINT64_MAX;  // Metering.TotWhOut
     live->grid_import_wh   = modbus_proxy.get_cached(30581, 2, &v) ? v : UINT64_MAX;  // GridMs.TotWhIn
     live->grid_export_wh   = modbus_proxy.get_cached(30583, 2, &v) ? v : UINT64_MAX;  // GridMs.TotWhOut
-    live->bat_charge_wh    = UINT64_MAX;                                               // not polled
+    live->bat_charge_wh    = modbus_proxy.get_cached(31397, 4, &v) ? v : UINT64_MAX;  // BatChrg.BatChrg
     live->bat_discharge_wh = modbus_proxy.get_cached(31401, 4, &v) ? v : UINT64_MAX;  // CmpBMS.GetBatDschWh
     live->serial = goodwe_serial;
     live->model  = model;
@@ -913,6 +913,7 @@ void SbseController::fill_solis_live(SbseSolis::Live *live)
     live->soc_pct   = soc_pct;
     live->pv_w      = modbus_proxy.get_cached(30773, 2, &v) ? static_cast<int32_t>(v) : -1;   // DcMs.Watt[0]
     live->pv_total_wh      = modbus_proxy.get_cached(30513, 4, &v) ? v : UINT64_MAX;  // Metering.TotWhOut
+    live->bat_charge_wh    = modbus_proxy.get_cached(31397, 4, &v) ? v : UINT64_MAX;  // BatChrg.BatChrg
     live->bat_discharge_wh = modbus_proxy.get_cached(31401, 4, &v) ? v : UINT64_MAX;  // CmpBMS.GetBatDschWh
     // SMA NaN: 0xFFFFFFFF (all ones, filtered by get_cached) / 0x80000000.
     live->bat_voltage_cv = modbus_proxy.get_cached(30851, 2, &v) ? static_cast<uint32_t>(v) : 0;  // Bat.Vol
