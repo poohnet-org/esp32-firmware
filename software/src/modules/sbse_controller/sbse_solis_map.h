@@ -60,7 +60,10 @@ public:
     static constexpr uint16_t INVERTER_TYPE = 0x0340;
 
     // Remote control ("RC") registers.
-    static constexpr uint16_t REG_STORAGE_CONTROL = 43110;   // storage mode bits
+    static constexpr uint16_t REG_RESERVE_SOC     = 43024;   // battery reserve (backup) SoC [%]
+    static constexpr uint16_t REG_STORAGE_CONTROL = 43110;   // storage mode bits, see STORAGE_*
+    static constexpr uint16_t STORAGE_RESERVE     = 1u << 4; // keep the battery at >= 43024
+    static constexpr uint16_t STORAGE_GRID_CHARGE = 1u << 5; // allow grid charging (up to 43024)
     static constexpr uint16_t REG_CHARGE_LIMIT_DA    = 43117; // max charge current [0.1 A], 0 = block
     static constexpr uint16_t REG_DISCHARGE_LIMIT_DA = 43118; // max discharge current [0.1 A], 0 = block
     static constexpr uint16_t REG_RC_DISCHARGE_W  = 43129;   // force discharge power, W/10

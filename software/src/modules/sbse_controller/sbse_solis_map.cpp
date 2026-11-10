@@ -143,7 +143,7 @@ uint16_t SbseSolis::settings_default(uint16_t addr)
         case 44109:            return 10;    // dispatch SoC lower limit [%]
         case 44110:            return 100;   // dispatch SoC upper limit [%]
         case 44111:            return 10;    // dispatch reserve SoC [%]
-        case 43024:            return 10;    // battery reserve SoC [%]
+        case REG_RESERVE_SOC:  return 10;    // battery reserve SoC [%]
         case REG_STORAGE_CONTROL: return 1;  // self-use
         case REG_RC_TIMEOUT_MIN: return 5;   // RC timeout [min]
         default:               return 0;

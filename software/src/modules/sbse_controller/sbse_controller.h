@@ -165,6 +165,9 @@ private:
     void apply_solis_dispatch();              // 44100+ remote dispatch
     void fill_solis_live(SbseSolis::Live *live);
     void solis_rc_timeout_tick();
+    void solis_reserve_tick();                // re-check the reserve SoC as the SoC moves
+    ModbusCommand solis_rc_command(int32_t *power) const;
+    ModbusCommand solis_reserve_command(int32_t *power) const;
 
     // Shared by the register-map adapters (GoodWe, Solis).
     void note_map_traffic();                  // watchdog liveness on any request

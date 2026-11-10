@@ -896,9 +896,10 @@ void SbseController::apply_goodwe_ems()
 //
 // Same pattern as GoodWe: reads from sbse_solis_map, writes into the
 // settings shadow, every write logged. Remote control (43135 + 43136 / 43129
-// + 43282) is translated into the neutral command; other writes (storage
-// mode 43110, time-of-use slots, remote dispatch 441xx) are stored and
-// logged but have no effect yet -- the logs show which ones a client uses.
+// + 43282), the current limits 43117 / 43118, the reserve SoC 43024 with the
+// storage bits 43110 and remote dispatch 441xx are translated into the
+// neutral command; other writes (time-of-use slots, ...) are stored and
+// logged but have no effect -- the logs show which ones a client uses.
 // ---------------------------------------------------------------------------
 
 void SbseController::fill_solis_live(SbseSolis::Live *live)
@@ -974,6 +975,8 @@ TFModbusTCPExceptionCode SbseController::on_solis_write(
                   || addr == SbseSolis::REG_RC_TIMEOUT_MIN
                   || addr == SbseSolis::REG_CHARGE_LIMIT_DA
                   || addr == SbseSolis::REG_DISCHARGE_LIMIT_DA
+                  || addr == SbseSolis::REG_RESERVE_SOC
+                  || addr == SbseSolis::REG_STORAGE_CONTROL
                   || (addr >= SbseSolis::REG_RD_FIRST && addr <= SbseSolis::REG_RD_LAST);
     }
     for (uint16_t i = 0; i < reg_count; ++i) {
@@ -1011,15 +1014,8 @@ void SbseController::apply_solis_rc()
         timeout_min = 5;   // inverter default
     }
 
-    ModbusCommand cmd   = ModbusCommand::Auto;
-    int32_t       power = 0;
-    if (force == SbseSolis::RC_FORCE_CHARGE) {
-        power = charge_w;
-        cmd   = power > 0 ? ModbusCommand::ForceCharge : ModbusCommand::Idle;
-    } else if (force == SbseSolis::RC_FORCE_DISCHARGE) {
-        power = discharge_w;
-        cmd   = power > 0 ? ModbusCommand::ForceDischarge : ModbusCommand::Idle;
-    }
+    int32_t             power = 0;
+    const ModbusCommand cmd   = solis_rc_command(&power);
 
     // Like the real inverter, a remote-control command lapses back to the
     // storage mode (auto) unless the client re-writes it within the timeout.
@@ -1027,32 +1023,94 @@ void SbseController::apply_solis_rc()
                          ? -1_us
                          : now_us() + micros_t{static_cast<int64_t>(timeout_min) * 60000000LL};
 
+    char charge_lim[8]    = "-";
+    char discharge_lim[8] = "-";
+    if (solis_settings.contains(SbseSolis::REG_CHARGE_LIMIT_DA))
+        snprintf(charge_lim,    sizeof(charge_lim),    "%u", solis_settings.get(SbseSolis::REG_CHARGE_LIMIT_DA));
+    if (solis_settings.contains(SbseSolis::REG_DISCHARGE_LIMIT_DA))
+        snprintf(discharge_lim, sizeof(discharge_lim), "%u", solis_settings.get(SbseSolis::REG_DISCHARGE_LIMIT_DA));
+    logger.printfln("solis: RC force %u, charge %ld W, discharge %ld W, timeout %u min, current limits %s / %s dA, "
+                    "storage %u, reserve %u %%, SoC %u %% -> %s %ld W",
+                    force, static_cast<long>(charge_w), static_cast<long>(discharge_w),
+                    timeout_min, charge_lim, discharge_lim,
+                    solis_settings.get(SbseSolis::REG_STORAGE_CONTROL),
+                    solis_settings.get(SbseSolis::REG_RESERVE_SOC), soc_pct,
+                    modbus_command_name(cmd), static_cast<long>(power));
+    set_modbus_command(cmd, power);
+    refresh_running_mode();
+}
+
+// Command from the remote-control registers, in priority order: force mode
+// 43135, current-limit blocks 43117 / 43118, reserve SoC 43024 / 43110.
+SbseController::ModbusCommand SbseController::solis_rc_command(int32_t *power) const
+{
+    *power = 0;
+    const uint16_t force = solis_settings.get(SbseSolis::REG_RC_FORCE);
+    if (force == SbseSolis::RC_FORCE_CHARGE) {
+        *power = static_cast<int32_t>(solis_settings.get(SbseSolis::REG_RC_CHARGE_W)) * 10;
+        return *power > 0 ? ModbusCommand::ForceCharge : ModbusCommand::Idle;
+    }
+    if (force == SbseSolis::RC_FORCE_DISCHARGE) {
+        *power = static_cast<int32_t>(solis_settings.get(SbseSolis::REG_RC_DISCHARGE_W)) * 10;
+        return *power > 0 ? ModbusCommand::ForceDischarge : ModbusCommand::Idle;
+    }
+
     // Battery current limits 43117 / 43118: a client-written 0 blocks that
     // direction (WARP's "block charge / discharge"). Other values are not
     // enforced -- the operator's max charge / discharge power applies. Like
     // on the real inverter they persist (no RC timeout); the Modbus
     // watchdog still reverts them when the client goes away.
-    const bool has_charge_limit    = solis_settings.contains(SbseSolis::REG_CHARGE_LIMIT_DA);
-    const bool has_discharge_limit = solis_settings.contains(SbseSolis::REG_DISCHARGE_LIMIT_DA);
-    const bool charge_blocked    = has_charge_limit    && solis_settings.get(SbseSolis::REG_CHARGE_LIMIT_DA) == 0;
-    const bool discharge_blocked = has_discharge_limit && solis_settings.get(SbseSolis::REG_DISCHARGE_LIMIT_DA) == 0;
-    if (force == SbseSolis::RC_FORCE_NONE) {
-        if (charge_blocked && discharge_blocked) {
-            cmd = ModbusCommand::Idle;
-        } else if (charge_blocked) {
-            cmd = ModbusCommand::NoCharge;
-        } else if (discharge_blocked) {
-            cmd = ModbusCommand::NoDischarge;
-        }
-    }
+    const bool charge_blocked    = solis_settings.contains(SbseSolis::REG_CHARGE_LIMIT_DA)
+                                && solis_settings.get(SbseSolis::REG_CHARGE_LIMIT_DA) == 0;
+    const bool discharge_blocked = solis_settings.contains(SbseSolis::REG_DISCHARGE_LIMIT_DA)
+                                && solis_settings.get(SbseSolis::REG_DISCHARGE_LIMIT_DA) == 0;
+    if (charge_blocked && discharge_blocked) return ModbusCommand::Idle;
+    if (charge_blocked)                      return ModbusCommand::NoCharge;
+    if (discharge_blocked)                   return ModbusCommand::NoDischarge;
 
-    char charge_lim[8]    = "-";
-    char discharge_lim[8] = "-";
-    if (has_charge_limit)    snprintf(charge_lim,    sizeof(charge_lim),    "%u", solis_settings.get(SbseSolis::REG_CHARGE_LIMIT_DA));
-    if (has_discharge_limit) snprintf(discharge_lim, sizeof(discharge_lim), "%u", solis_settings.get(SbseSolis::REG_DISCHARGE_LIMIT_DA));
-    logger.printfln("solis: RC force %u, charge %ld W, discharge %ld W, timeout %u min, current limits %s / %s dA -> %s %ld W",
-                    force, static_cast<long>(charge_w), static_cast<long>(discharge_w),
-                    timeout_min, charge_lim, discharge_lim, modbus_command_name(cmd), static_cast<long>(power));
+    return solis_reserve_command(power);
+}
+
+// Battery reserve ("backup") SoC: with storage bit 4 set the inverter keeps
+// the battery at >= 43024 -- no discharge at or below it; with bit 5 (allow
+// grid charge) it also charges from the grid up to it. evcc's solis-hybrid-s
+// template steers the battery this way: normal = 17 + minsoc, hold = 17 +
+// current SoC, charge = 49 + maxsoc. Depends on the SoC, so
+// solis_reserve_tick() re-evaluates it as the SoC moves.
+SbseController::ModbusCommand SbseController::solis_reserve_command(int32_t *power) const
+{
+    *power = 0;
+    const uint16_t storage = solis_settings.get(SbseSolis::REG_STORAGE_CONTROL);
+    const uint16_t reserve = solis_settings.get(SbseSolis::REG_RESERVE_SOC);
+    if ((storage & SbseSolis::STORAGE_RESERVE) == 0 || soc_pct == 255) {
+        return ModbusCommand::Auto;
+    }
+    if ((storage & SbseSolis::STORAGE_GRID_CHARGE) != 0 && soc_pct < reserve) {
+        *power = max_charge_w;
+        return *power > 0 ? ModbusCommand::ForceCharge : ModbusCommand::NoDischarge;
+    }
+    return soc_pct <= reserve ? ModbusCommand::NoDischarge : ModbusCommand::Auto;
+}
+
+void SbseController::solis_reserve_tick()
+{
+    // Only while the remote-control path is in charge without a force or
+    // dispatch command (those have their own timers).
+    if (modbus_server_protocol != SbseModbusProtocol::Solis
+     || map_apply_task_id != 0
+     || solis_settings.get(SbseSolis::REG_RD_ENABLE) == 1
+     || solis_settings.get(SbseSolis::REG_RC_FORCE) != SbseSolis::RC_FORCE_NONE) {
+        return;
+    }
+    int32_t             power = 0;
+    const ModbusCommand cmd   = solis_rc_command(&power);
+    if (cmd == modbus_cmd && (cmd != ModbusCommand::ForceCharge || power == modbus_cmd_power_w)) {
+        return;
+    }
+    logger.printfln("solis: SoC %u %%, reserve %u %%, storage %u -> %s %ld W",
+                    soc_pct, solis_settings.get(SbseSolis::REG_RESERVE_SOC),
+                    solis_settings.get(SbseSolis::REG_STORAGE_CONTROL),
+                    modbus_command_name(cmd), static_cast<long>(power));
     set_modbus_command(cmd, power);
     refresh_running_mode();
 }
@@ -1183,6 +1241,8 @@ void SbseController::clear_modbus_command()
     solis_settings.set(SbseSolis::REG_RD_ENABLE, 0);
     solis_settings.erase(SbseSolis::REG_CHARGE_LIMIT_DA);
     solis_settings.erase(SbseSolis::REG_DISCHARGE_LIMIT_DA);
+    solis_settings.erase(SbseSolis::REG_RESERVE_SOC);
+    solis_settings.erase(SbseSolis::REG_STORAGE_CONTROL);
     solis_rc_deadline_us = -1_us;
     modbus_active        = false;
     last_modbus_write_us = -1_us;
@@ -1229,6 +1289,7 @@ void SbseController::revert_modbus_overrides()
 void SbseController::watchdog_tick()
 {
     solis_rc_timeout_tick();
+    solis_reserve_tick();
 
     if (!modbus_active || modbus_server_watchdog_ms == 0 || last_modbus_write_us == -1_us) {
         return;
